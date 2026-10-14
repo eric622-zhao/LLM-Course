@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AnythingLLM 文件上传</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --panel: #ffffff;
+    --ink: #1b2233;
+    --ink-soft: #5c6784;
+    --line: #e3e8f2;
+    --brand: #3d6bff;
+    --brand-dark: #2b52d6;
+    --ok: #12a15a;
+    --err: #d92b2b;
+    --radius: 16px;
+    --shadow: 0 18px 50px rgba(28, 42, 84, .12);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 20px;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(900px 480px at 12% -8%, #dfe8ff 0%, transparent 60%),
+      radial-gradient(760px 420px at 100% 4%, #e6f7f1 0%, transparent 55%),
+      var(--bg);
+  }
+
+  .shell { width: 100%; max-width: 620px; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 30px 30px 26px;
+  }
+
+  header { margin-bottom: 22px; }
+
+  h1 {
+    margin: 0 0 8px;
+    font-size: 21px;
+    letter-spacing: .2px;
+  }
+
+  .sub {
+    margin: 0;
+    font-size: 13.5px;
+    line-height: 1.65;
+    color: var(--ink-soft);
+  }
+
+  .target {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0 20px;
+    padding: 11px 14px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: #f8faff;
+    font-size: 13px;
+  }
+
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #c3cbdb;
+    flex: none;
+  }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 4px rgba(18,161,90,.14); }
+  .dot.off { background: var(--err); box-shadow: 0 0 0 4px rgba(217,43,43,.13); }
+
+  .target .label { color: var(--ink-soft); }
+  .target strong { font-weight: 600; }
+  .target .spacer { flex: 1; }
+
+  textarea {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--ink);
+    background: #fff;
+    resize: vertical;
+    display: none;
+  }
+
+  .drop {
+    border: 1.8px dashed #c6d2ea;
+    border-radius: 13px;
+    padding: 34px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: .18s ease;
+    background: #fbfcff;
+  }
+
+  .drop:hover, .drop.hot {
+    border-color: var(--brand);
+    background: #f2f6ff;
+  }
+
+  .drop .icon {
+    width: 44px; height: 44px;
+    margin: 0 auto 12px;
+    border-radius: 12px;
+    background: linear-gradient(140deg, #e8efff, #dbe7ff);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 21px;
+  }
+
+  .drop .t1 { font-size: 14.5px; font-weight: 600; }
+  .drop .t2 { margin-top: 6px; font-size: 12.5px; color: var(--ink-soft); }
+
+  .file {
+    display: none;
+    align-items: center;
+    gap: 11px;
+    margin-top: 16px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: #f8faff;
+  }
+
+  .file.show { display: flex; }
+
+  .file .name {
+    flex: 1;
+    font-size: 13.5px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file .size { font-size: 12px; color: var(--ink-soft); flex: none; }
+
+  .file button {
+    flex: none;
+    border: 0;
+    background: transparent;
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 4px;
+  }
+  .file button:hover { color: var(--err); }
+
+  .actions { margin-top: 20px; }
+
+  .btn {
+    width: 100%;
+    border: 0;
+    border-radius: 11px;
+    padding: 13px 18px;
+    font: inherit;
+    font-size: 14.5px;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(180deg, var(--brand), var(--brand-dark));
+    cursor: pointer;
+    transition: .18s ease;
+  }
+
+  .btn:hover:not(:disabled) { filter: brightness(1.06); }
+  .btn:disabled {
+    background: #ccd5e6;
+    cursor: not-allowed;
+  }
+
+  .bar {
+    height: 6px;
+    border-radius: 99px;
+    background: #e8ecf6;
+    overflow: hidden;
+    margin-top: 14px;
+    display: none;
+  }
+  .bar.show { display: block; }
+  .bar span {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: 99px;
+    background: linear-gradient(90deg, var(--brand), #58c8a8);
+    transition: width .25s ease;
+  }
+
+  .msg {
+    display: none;
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 11px;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .msg.show { display: block; }
+  .msg.ok { background: #eafaf1; border: 1px solid #bfe9d2; color: #0d7a45; }
+  .msg.err { background: #fdeeee; border: 1px solid #f6cccc; color: #b01f1f; }
+  .msg.info { background: #eef3ff; border: 1px solid #d3dffa; color: #2b4a9b; }
+
+  footer {
+    margin-top: 18px;
+    text-align: center;
+    font-size: 11.5px;
+    color: #8b95ab;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="card">
+    <header>
+      <h1>📤 上传文件到 AnythingLLM</h1>
+      <p class="sub">选择一个本地文件，上传到 AnythingLLM 的工作区，系统会自动解析并向量化，随后即可在该工作区里提问。</p>
+    </header>
+
+    <div class="target">
+      <span class="dot" id="dot"></span>
+      <span class="label">目标工作区</span>
+      <strong id="ws">检测中…</strong>
+      <span class="spacer"></span>
+      <button id="switchWs" style="border:0;background:none;color:var(--brand);font:inherit;font-size:12.5px;cursor:pointer;display:none">换一个</button>
+    </div>
+
+    <textarea id="wsList" rows="4" placeholder="每行一个 slug，第一行即默认目标"></textarea>
+
+    <div class="drop" id="drop">
+      <div class="icon">📄</div>
+      <div class="t1">点击选择文件，或把文件拖到这里</div>
+      <div class="t2">支持 txt / md / pdf / docx / csv / json 等 AnythingLLM 可解析格式</div>
+      <input type="file" id="input" hidden />
+    </div>
+
+    <div class="file" id="file">
+      <span class="name" id="fname"></span>
+      <span class="size" id="fsize"></span>
+      <button id="clear" title="移除">✕</button>
+    </div>
+
+    <div class="bar" id="bar"><span id="barIn"></span></div>
+
+    <div class="actions">
+      <button class="btn" id="upload" disabled>开始上传</button>
+    </div>
+
+    <div class="msg" id="msg"></div>
+
+    <footer>AnythingLLM 文件上传页 · 第三次开发任务</footer>
+  </div>
+</div>
+
+<script>
+const drop   = document.getElementById('drop');
+const input  = document.getElementById('input');
+const fileBox= document.getElementById('file');
+const fname  = document.getElementById('fname');
+const fsize  = document.getElementById('fsize');
+const clearB = document.getElementById('clear');
+const uploadB= document.getElementById('upload');
+const bar    = document.getElementById('bar');
+const barIn  = document.getElementById('barIn');
+const msg    = document.getElementById('msg');
+const dot    = document.getElementById('dot');
+const wsEl   = document.getElementById('ws');
+const wsList = document.getElementById('wsList');
+const switchB= document.getElementById('switchWs');
+
+let picked = null;
+
+function human(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+function say(type, text) {
+  msg.className = 'msg show ' + type;
+  msg.textContent = text;
+}
+
+function showProgress(p) {
+  bar.classList.add('show');
+  barIn.style.width = Math.max(0, Math.min(100, p)) + '%';
+}
+
+function setFile(f) {
+  if (!f) return;
+  picked = f;
+  fname.textContent = f.name;
+  fsize.textContent = human(f.size);
+  fileBox.classList.add('show');
+  uploadB.disabled = false;
+  msg.className = 'msg';
+}
+
+function resetFile() {
+  picked = null;
+  input.value = '';
+  fileBox.classList.remove('show');
+  uploadB.disabled = true;
+  bar.classList.remove('show');
+  barIn.style.width = '0%';
+}
+
+drop.addEventListener('click', () => input.click());
+input.addEventListener('change', () => setFile(input.files[0]));
+clearB.addEventListener('click', resetFile);
+
+['dragenter', 'dragover'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hot'); }));
+['dragleave', 'drop'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('hot'); }));
+drop.addEventListener('drop', e => {
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+
+async function loadWorkspaces() {
+  try {
+    const r = await fetch('/api/workspaces');
+    const j = await r.json();
+    const list = j.workspaces || [];
+    if (!r.ok || !list.length) throw new Error(j.message || '没有读到任何工作区');
+    wsEl.textContent = list[0].name || list[0].slug;
+    dot.className = 'dot on';
+    wsList.value = list.map(w => w.slug).join('\n');
+    if (list.length > 1) switchB.style.display = 'inline';
+  } catch (e) {
+    dot.className = 'dot off';
+    wsEl.textContent = '未连接';
+    say('err', '读取工作区失败：' + e.message + '\n请确认 AnythingLLM 已打开。');
+  }
+}
+
+switchB.addEventListener('click', () => {
+  wsList.style.display = wsList.style.display === 'block' ? 'none' : 'block';
+});
+
+uploadB.addEventListener('click', () => {
+  if (!picked) return;
+  const slug = (wsList.value.split('\n')[0] || '').trim();
+  const form = new FormData();
+  form.append('file', picked);
+  if (slug) form.append('slug', slug);
+
+  uploadB.disabled = true;
+  uploadB.textContent = '上传中…';
+  say('info', '正在上传并等待向量化，大文件请耐心等待…');
+  showProgress(8);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/upload');
+
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) showProgress(e.loaded / e.total * 88);
+  };
+
+  xhr.onload = () => {
+    let j = {};
+    try { j = JSON.parse(xhr.responseText); } catch (_) {}
+    showProgress(100);
+    if (xhr.status >= 200 && xhr.status < 300 && j.success) {
+      say('ok', '✅ 上传成功：' + picked.name + '\n工作区：' + (j.workspace || slug) +
+          (j.location ? '\n服务器路径：' + j.location : ''));
+      resetFile();
+    } else {
+      say('err', '❌ 上传失败：' + (j.message || xhr.status + ' ' + xhr.statusText));
+    }
+    uploadB.disabled = false;
+    uploadB.textContent = '开始上传';
+    bar.classList.remove('show');
+  };
+
+  xhr.onerror = () => {
+    say('err', '❌ 网络错误，上传未完成。');
+    uploadB.disabled = false;
+    uploadB.textContent = '开始上传';
+    bar.classList.remove('show');
+  };
+
+  xhr.send(form);
+});
+
+loadWorkspaces();
+</script>
+</body>
+</html>
