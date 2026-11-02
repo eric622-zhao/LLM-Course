@@ -69,6 +69,12 @@ Screen {
     padding: 0 1;
 }
 
+/* 配置类警告（缺 api_key 等）：醒目但不刺眼 */
+.side-warn {
+    color: #d29922;
+    padding: 0 1;
+}
+
 /* ---------- 消息 ---------- */
 .msg {
     width: 100%;

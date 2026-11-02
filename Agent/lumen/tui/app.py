@@ -154,6 +154,7 @@ class LumenApp(App):
         project_root: str,
         extra_system: str = "",
         skills: list[tuple[str, str]] | None = None,
+        warning: str = "",
     ) -> None:
         super().__init__()
         self.project_root = project_root
@@ -161,8 +162,11 @@ class LumenApp(App):
         # [(name, description)] —— 只用于侧栏展示，正文由 loadSkill 按需读取
         self.skills = skills or []
         self.skill_names = [name for name, _ in self.skills]
+        # 配置类问题（缺 api_key 等）：界面照常打开，只在状态区提示
+        self.warning = warning
 
         self.agent: Agent | None = None
+        self._init_error = ""
         self._agent_msg: AgentMessage | None = None
         self._acc = ""
         self._last_flush = 0.0
@@ -219,9 +223,17 @@ class LumenApp(App):
         yield Static("状态", classes="side-title")
         yield Static("就绪", classes="side-item", id="status")
         yield Static("轮次 0  ·  tokens 0", classes="side-dim", id="stats")
+        if self.warning:
+            yield Static("注意", classes="side-title")
+            yield Static(f"  {self.warning}", classes="side-warn", markup=False)
 
     def on_mount(self) -> None:
-        self.agent = Agent(extra_system=self.extra_system)
+        try:
+            self.agent = Agent(extra_system=self.extra_system)
+        except Exception as exc:  # noqa: BLE001 - 依赖缺失/配置错误不该让界面起不来
+            self._init_error = f"{type(exc).__name__}: {exc}"
+            self._set_status("初始化失败")
+            self._show_error(self._init_error)
         self.query_one("#prompt", Input).focus()
         self._refresh_stats()
 
@@ -263,6 +275,13 @@ class LumenApp(App):
         await self._ask(text)
 
     async def _ask(self, text: str) -> None:
+        if self.agent is None:
+            await self._system_note(
+                f"无法发起请求：{self._init_error or 'Agent 未初始化'}\n"
+                f"请检查 config.ini 的 api_key / base_url / model，以及依赖是否装齐（pip install -r requirements.txt）。"
+            )
+            return
+
         log = self.query_one("#log", VerticalScroll)
         await log.mount(UserMessage(text))
 
@@ -279,9 +298,12 @@ class LumenApp(App):
 
     # ------------------------------------------------------------------ 工作线程
     def _run_agent(self, text: str) -> None:
-        assert self.agent is not None
+        agent = self.agent
+        if agent is None:
+            self.call_from_thread(self._finish_turn)
+            return
         try:
-            self.agent.ask(
+            agent.ask(
                 text,
                 on_delta=self._on_delta,
                 on_tool_call=self._on_tool_call,

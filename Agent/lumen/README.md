@@ -340,20 +340,26 @@ sequenceDiagram
 pip install -r requirements.txt
 ```
 
+`textual` 没装上的话，`main.py` 会**自动降级成 CLI 模式**并在屏幕上说明缺什么 ——
+界面打不开基本都是这一步没做。
+
 ### 2. 写配置
 
-```bash
-copy config.example.ini config.ini
-```
-
-至少填 `[llm]` 的 `api_key`。用 DeepSeek / Kimi / 通义时记得同时改 `base_url` 和 `model` ——
+**第一次运行会自动生成** `config.ini`（从 `config.example.ini` 复制），不需要手动 copy。
+生成后打开它，至少填 `[llm]` 的 `api_key`。用 DeepSeek / Kimi / 通义时记得同时改 `base_url` 和 `model` ——
 模型必须支持 Function Calling。
+
+> 没填 `api_key` 也能启动、能看到界面，只是提问时会提示配置缺失。
+> 这样至少不会「一开就闪退、还不知道为什么」。
 
 要用联网搜索，再填 `[search]` 的 `baidu_qianfan_api_key`
 （[千帆控制台](https://console.bce.baidu.com/qianfan/) 创建，并开通「百度搜索」服务）。
 不填只影响 `searchWeb`，其它功能照常用。
 
 ### 3. 启动
+
+Windows 下双击 `run.bat` 即可（它已经帮你 `cd` 到本目录）。
+命令行启动：
 
 ```bash
 cd D:\LLM-Course\Agent\lumen
@@ -370,6 +376,12 @@ python main.py --cli
 ```
 
 建议终端宽度 ≥ 100 列（右侧面板固定占 46 列）。
+
+自检（不需要 API Key，验证界面能否正常挂载与交互）：
+
+```bash
+python smoke_tui.py
+```
 
 ### 4. 加自己的 Skill
 
@@ -536,3 +548,21 @@ Skill 目录要在**启动时的工作目录**下的 `.agents\skills\`。先 `cd
 **Q：TUI 显示成乱码 / 方块**
 换支持中文的等宽字体（Windows Terminal 推荐「等距更纱黑体」或「Cascadia Mono + 微软雅黑」组合），
 并把终端编码设为 UTF-8。
+
+**Q：`python main.py` 一闪就退出（窗口关了，看不到报错）**
+在命令行里手动跑，别双击。依次确认：
+
+1. `python -m pip install -r requirements.txt` 是否成功 —— 缺 `textual` 会退化成 CLI，缺 `openai` 会直接报错；
+2. `python smoke_tui.py` 能否 14 项全过 —— 不能的话把第一条 FAIL 的原文发出来；
+3. `echo %CD%` 是否就是 `lumen` 目录 —— 路径不对会导致找不到 `core` 包。
+
+**Q：`ModuleNotFoundError: No module named 'textual'`**
+依赖没装，或装到了另一个 Python 环境。用 `python -m pip install textual`，
+并确认 `python -c "import sys; print(sys.executable)"` 和 `pip -V` 指向同一个解释器。
+
+**Q：`pip install` 卡住不动 / 报 `from versions: none`**
+国内镜像源的相对链接会让某些 pip 版本（26.x）解析失败。改用官方源：
+
+```bash
+python -m pip install -r requirements.txt -i https://pypi.org/simple
+```
