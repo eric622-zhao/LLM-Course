@@ -8,7 +8,7 @@
 | 2 | [`AnythingLLMMCP/`](AnythingLLMMCP/) | 第二次开发任务 | AnythingLLM 工作区 MCP 服务器（Streamable HTTP） | 8091 |
 | 3 | [`AnythingLLMServer/`](AnythingLLMServer/) | 第三次开发任务 | 文件上传网页 + 转发服务，写入 AnythingLLM 第一个工作区 | 8092 |
 | 4 | [`Agent/Practice01/`](Agent/Practice01/) | 第四周开发任务 | 调用大模型：单次请求 → 流式 → 多轮流式对话 | — |
-| 5 | [`Agent/lumen/`](Agent/lumen/) | 第五、六周开发任务 | **流明 Lumen**：12 个 Function Calling 工具 + core/tui 分层 + Textual TUI 产品原型 | — |
+| 5 | [`Agent/lumen/`](Agent/lumen/) | 第五～七周开发任务 | **流明 Lumen**：16 个 Function Calling 工具（含网页抓取/联网搜索/本地命令/Skill 动态加载）+ core/tui 分层 + Textual TUI 产品原型 | — |
 
 ---
 
@@ -44,10 +44,16 @@
         ├── core/                 引擎层
         │   ├── config.py         配置读取
         │   ├── registry.py       工具注册表（@tool / schemas / dispatch）
+        │   ├── skills.py         Skill 发现 / Frontmatter / 安全读取
         │   ├── agent.py          Function Calling 循环（流式）
         │   └── tools/
         │       ├── system.py     getLocalTime · isLeapYear
-        │       └── file_ops.py   10 个文件 / 目录操作
+        │       ├── file_ops.py   10 个文件 / 目录操作
+        │       ├── fetch_web.py  fetchWeb：curl + trafilatura
+        │       ├── search_web.py searchWeb：百度千帆 AI 搜索
+        │       ├── run_cli.py    RunCli：argv + shell=False
+        │       └── load_skill.py loadSkill：按需加载 Skill
+        ├── .agents/skills/       示例 Skill（weekly-report / repo-checkup）
         ├── tui/                  表现层
         │   ├── app.py            Textual App
         │   └── app.tcss          样式表
@@ -114,12 +120,18 @@ python main.py                          # 拉起 TUI
 python main.py --cli                    # 终端不支持时的纯命令行模式
 ```
 
-> **必须在 `Agent/lumen` 目录下启动**：文件类工具的路径沙箱以「启动时的当前工作目录」
-> 为项目根目录，换个目录启动等于换了可访问范围。
+> **必须在 `Agent/lumen` 目录下启动**：文件类工具的路径沙箱、Skill 的扫描起点，都是
+> 「启动时的当前工作目录」，换个目录启动等于换了可访问范围。
 >
-> 12 个工具：`getLocalTime` `isLeapYear` + `getCurrentDirectory` `listDirectory`
+> 第五、六周 12 个：`getLocalTime` `isLeapYear` + `getCurrentDirectory` `listDirectory`
 > `getFileType` `readFile` `writeFile` `createFile` `createDirectory` `renamePath`
-> `deleteDirectory` `deleteFile`。详见 [Agent/lumen/README.md](Agent/lumen/README.md)。
+> `deleteDirectory` `deleteFile`。
+>
+> 第七周 4 个：`fetchWeb`（网页正文转 Markdown）、`searchWeb`（百度千帆 AI 搜索）、
+> `RunCli`（本地命令，argv + `shell=False`）、`loadSkill`（Skill 按需加载）。
+>
+> 联网搜索需在 `config.ini` 的 `[search]` 填 `baidu_qianfan_api_key`，不填只影响该工具。
+> 详见 [Agent/lumen/README.md](Agent/lumen/README.md)。
 
 ## 三个服务的联调顺序
 

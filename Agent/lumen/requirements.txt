@@ -3,3 +3,6 @@
 
 openai>=1.30.0          # 与 OpenAI 兼容的接口客户端（DeepSeek / Kimi / 通义 等都走它）
 textual>=0.80.0         # TUI 框架
+trafilatura>=1.8.0      # 网页正文抽取（fetchWeb 用），会连带装 lxml
+requests>=2.31.0        # 调百度千帆搜索接口（searchWeb 用）
+PyYAML>=6.0             # 解析 SKILL.md 的 YAML Frontmatter（缺了会自动降级为内置解析）

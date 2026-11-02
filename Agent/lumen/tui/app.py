@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import time
+import unicodedata
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -111,6 +112,30 @@ def _first_line(text: str, limit: int = 96) -> str:
     return "（无输出）"
 
 
+def _char_width(ch: str) -> int:
+    """终端列宽：东亚全角字符占 2 列，其余占 1 列。"""
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def _fit(text: str, columns: int) -> str:
+    """按**显示列数**截断（不是字符数）。
+
+    中文一个字符顶两列，用 len() 截断会算错宽度：40 个汉字 = 80 列，
+    在 40 列的侧栏里必然折行，而且续行没有缩进，看起来就错位了。
+    """
+    if columns <= 1:
+        return ""
+    used = 0
+    out: list[str] = []
+    for ch in text:
+        width = _char_width(ch)
+        if used + width > columns - 1:
+            return "".join(out) + "…"
+        out.append(ch)
+        used += width
+    return text
+
+
 # ---------------------------------------------------------------------------
 # 主应用
 # ---------------------------------------------------------------------------
@@ -124,11 +149,18 @@ class LumenApp(App):
         Binding("f1", "help", "帮助", show=True),
     ]
 
-    def __init__(self, project_root: str, extra_system: str = "", skill_names: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        project_root: str,
+        extra_system: str = "",
+        skills: list[tuple[str, str]] | None = None,
+    ) -> None:
         super().__init__()
         self.project_root = project_root
         self.extra_system = extra_system
-        self.skill_names = skill_names or []
+        # [(name, description)] —— 只用于侧栏展示，正文由 loadSkill 按需读取
+        self.skills = skills or []
+        self.skill_names = [name for name, _ in self.skills]
 
         self.agent: Agent | None = None
         self._agent_msg: AgentMessage | None = None
@@ -152,8 +184,9 @@ class LumenApp(App):
         with Horizontal(id="body"):
             with VerticalScroll(id="log"):
                 yield Static(
-                    "你好，我是流明。可以帮你查时间、算闰年、读写项目文件，也能执行本地命令。\n"
-                    "直接提问即可，F1 查看快捷键。",
+                    "你好，我是流明。可以查时间、算闰年、读写项目文件，也能执行本地命令、"
+                    "抓取网页、联网搜索，并按需加载 Skill。\n"
+                    "直接提问即可，/skills 看当前技能，F1 查看快捷键。",
                     classes="welcome",
                     markup=False,
                 )
@@ -177,10 +210,11 @@ class LumenApp(App):
             for item in items:
                 yield Static(f"  {item}", classes="side-item")
 
-        if self.skill_names:
+        if self.skills:
             yield Static("Skills", classes="side-title")
-            for name in self.skill_names:
-                yield Static(f"  {name}", classes="side-item")
+            for name, description in self.skills:
+                yield Static(f"  {_fit(name, 40)}", classes="side-item")
+                yield Static(f"    {_fit(description, 38)}", classes="side-dim")
 
         yield Static("状态", classes="side-title")
         yield Static("就绪", classes="side-item", id="status")
@@ -210,6 +244,17 @@ class LumenApp(App):
             return
         if lowered == "/tools":
             await self._system_note("可用工具：" + "、".join(TOOLS))
+            return
+        if lowered == "/skills":
+            if not self.skills:
+                await self._system_note(
+                    f"当前没有 Skill。把技能放到 {self.project_root}\\.agents\\skills\\<名称>\\SKILL.md 后重启。"
+                )
+            else:
+                lines = [f"已加载 {len(self.skills)} 个 Skill："]
+                lines += [f"  {name}  —  {desc}" for name, desc in self.skills]
+                lines.append("（正文由模型按需调 loadSkill 读取）")
+                await self._system_note("\n".join(lines))
             return
         if self._busy:
             await self._system_note("上一条还在处理中，请稍候。")
@@ -333,7 +378,7 @@ class LumenApp(App):
     def action_help(self) -> None:
         self.notify(
             "Enter 发送 · Ctrl+L 清空上下文 · Ctrl+Q 退出\n"
-            "/tools 列出工具 · /clear 清空 · /help 帮助",
+            "/tools 列出工具 · /skills 列出技能 · /clear 清空 · /help 帮助",
             title="快捷键",
             timeout=6,
         )
