@@ -1,0 +1,157 @@
+/* 流明 Lumen · TUI 样式
+   配色：深空蓝黑底 + 青色主色，长时间盯屏不刺眼
+   #0d1117 页面底 / #161b22 面板 / #58a6ff 主色 / #3fb950 助手 / #d29922 工具
+*/
+
+Screen {
+    background: #0d1117;
+    color: #c9d1d9;
+}
+
+/* ---------- 顶栏 ---------- */
+#topbar {
+    height: 3;
+    background: #161b22;
+    border-bottom: solid #21262d;
+    padding: 0 2;
+}
+
+#brand {
+    width: auto;
+    content-align: left middle;
+    text-style: bold;
+    color: #58a6ff;
+}
+
+#meta {
+    width: 1fr;
+    content-align: right middle;
+    color: #6e7681;
+}
+
+/* ---------- 主体 ---------- */
+#body {
+    height: 1fr;
+}
+
+#log {
+    width: 1fr;
+    padding: 1 2;
+    scrollbar-size-vertical: 1;
+}
+
+#sidebar {
+    width: 46;
+    background: #0f151c;
+    border-left: solid #21262d;
+    padding: 1 1;
+    scrollbar-size-vertical: 1;
+}
+
+.side-title {
+    color: #58a6ff;
+    text-style: bold;
+    margin: 1 0 0 0;
+    padding: 0 1;
+}
+
+.side-item {
+    color: #8b949e;
+    padding: 0 1;
+}
+
+.side-item:hover {
+    color: #c9d1d9;
+}
+
+.side-dim {
+    color: #484f58;
+    padding: 0 1;
+}
+
+/* ---------- 消息 ---------- */
+.msg {
+    width: 100%;
+    margin: 0 0 1 0;
+    padding: 0 1;
+}
+
+.user {
+    background: #16222f;
+    border-left: thick #58a6ff;
+    color: #dbe7f3;
+}
+
+.agent {
+    background: #12181f;
+    border-left: thick #3fb950;
+    color: #c9d1d9;
+}
+
+.tool-call {
+    width: 100%;
+    color: #d29922;
+    background: #161b22;
+    border-left: thick #d29922;
+    padding: 0 1;
+    margin: 0 0 0 2;
+}
+
+.tool-result {
+    width: 100%;
+    color: #7d8590;
+    padding: 0 1;
+    margin: 0 0 1 4;
+}
+
+.error {
+    width: 100%;
+    color: #ff7b72;
+    background: #1f1416;
+    border-left: thick #f85149;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+.welcome {
+    width: 100%;
+    color: #6e7681;
+    padding: 0 0 1 0;
+}
+
+/* ---------- 输入区 ---------- */
+#prompt-row {
+    height: 3;
+    background: #161b22;
+    border-top: solid #21262d;
+    padding: 0 1 0 2;
+    align: left middle;
+}
+
+#prompt-mark {
+    width: 2;
+    height: 1;
+    color: #58a6ff;
+    text-style: bold;
+    content-align: center middle;
+}
+
+#prompt {
+    width: 1fr;
+    height: 1;
+    border: none;
+    background: #161b22;
+    color: #e6edf3;
+    padding: 0 1;
+}
+
+#prompt:focus {
+    border: none;
+}
+
+#hint {
+    height: 1;
+    background: #0d1117;
+    color: #484f58;
+    padding: 0 2;
+}

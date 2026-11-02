@@ -1,0 +1,5 @@
+# 流明 Lumen 运行依赖
+# 安装：pip install -r requirements.txt
+
+openai>=1.30.0          # 与 OpenAI 兼容的接口客户端（DeepSeek / Kimi / 通义 等都走它）
+textual>=0.80.0         # TUI 框架

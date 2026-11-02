@@ -1,6 +1,6 @@
-# LLM 课程作业 · 四个开发任务
+# LLM 课程作业 · 开发任务
 
-本仓库是 LLM 课程的四次开发任务实现，按任务分目录组织。
+本仓库是 LLM 课程各阶段开发任务的实现，按任务分目录组织。
 
 | # | 目录 | 任务 | 交付物 | 端口 |
 | --- | --- | --- | --- | --- |
@@ -8,6 +8,7 @@
 | 2 | [`AnythingLLMMCP/`](AnythingLLMMCP/) | 第二次开发任务 | AnythingLLM 工作区 MCP 服务器（Streamable HTTP） | 8091 |
 | 3 | [`AnythingLLMServer/`](AnythingLLMServer/) | 第三次开发任务 | 文件上传网页 + 转发服务，写入 AnythingLLM 第一个工作区 | 8092 |
 | 4 | [`Agent/Practice01/`](Agent/Practice01/) | 第四周开发任务 | 调用大模型：单次请求 → 流式 → 多轮流式对话 | — |
+| 5 | [`Agent/lumen/`](Agent/lumen/) | 第五、六周开发任务 | **流明 Lumen**：12 个 Function Calling 工具 + core/tui 分层 + Textual TUI 产品原型 | — |
 
 ---
 
@@ -31,10 +32,25 @@
 │   ├── requirements.txt
 │   └── README.md
 └── Agent/
-    └── Practice01/
-        ├── main.py               单次请求
-        ├── main-stream.py        流式输出
-        ├── main-stream-loop.py   多轮流式对话
+    ├── Practice01/
+    │   ├── main.py               单次请求
+    │   ├── main-stream.py        流式输出
+    │   ├── main-stream-loop.py   多轮流式对话
+    │   ├── config.example.ini
+    │   ├── requirements.txt
+    │   └── README.md
+    └── lumen/                    流明 Lumen · 产品原型
+        ├── main.py               入口（--cli 可退化到纯命令行）
+        ├── core/                 引擎层
+        │   ├── config.py         配置读取
+        │   ├── registry.py       工具注册表（@tool / schemas / dispatch）
+        │   ├── agent.py          Function Calling 循环（流式）
+        │   └── tools/
+        │       ├── system.py     getLocalTime · isLeapYear
+        │       └── file_ops.py   10 个文件 / 目录操作
+        ├── tui/                  表现层
+        │   ├── app.py            Textual App
+        │   └── app.tcss          样式表
         ├── config.example.ini
         ├── requirements.txt
         └── README.md
@@ -87,6 +103,23 @@ pip install -r requirements.txt
 copy config.example.ini config.ini      # 填入自己的 api_key
 python main.py                          # 再依次试 main-stream.py / main-stream-loop.py
 ```
+
+### 任务 5 · Agent/lumen（流明）
+
+```bash
+cd Agent/lumen
+pip install -r requirements.txt
+copy config.example.ini config.ini      # 填入 api_key，模型需支持 Function Calling
+python main.py                          # 拉起 TUI
+python main.py --cli                    # 终端不支持时的纯命令行模式
+```
+
+> **必须在 `Agent/lumen` 目录下启动**：文件类工具的路径沙箱以「启动时的当前工作目录」
+> 为项目根目录，换个目录启动等于换了可访问范围。
+>
+> 12 个工具：`getLocalTime` `isLeapYear` + `getCurrentDirectory` `listDirectory`
+> `getFileType` `readFile` `writeFile` `createFile` `createDirectory` `renamePath`
+> `deleteDirectory` `deleteFile`。详见 [Agent/lumen/README.md](Agent/lumen/README.md)。
 
 ## 三个服务的联调顺序
 
