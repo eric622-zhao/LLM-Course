@@ -542,6 +542,20 @@ def _char_width(ch): return 2 if unicodedata.east_asian_width(ch) in ("W", "F") 
 **Q：模型不调工具，直接自己编答案**
 换一个支持 Function Calling 的模型。部分小模型/量化模型不支持 `tools` 参数。
 
+**Q：报 `404 ... has not activated the model`（火山方舟）**
+Key 有效，但账号还没开通这个模型。去 <https://console.volcengine.com/ark> 的
+**开通管理** → 模型页签 → 找到目标模型点「开通服务」。
+
+判断某个模型能不能用，先查账号下有哪些、哪个支持工具调用：
+
+```bash
+curl -s https://ark.cn-beijing.volces.com/api/v3/models \
+  -H "Authorization: Bearer 你的key"
+```
+
+返回里 `features.tools.function_calling` 为 `true` 的才能调工具。
+注意刚开通后可能有几分钟同步延迟，期间会误报同样的 404。
+
 **Q：`searchWeb` 报「尚未配置」**
 `[search] baidu_qianfan_api_key` 没填。填上后重启。
 
