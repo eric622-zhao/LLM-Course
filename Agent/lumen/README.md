@@ -358,30 +358,45 @@ pip install -r requirements.txt
 
 ### 3. 启动
 
-Windows 下双击 `run.bat` 即可（它已经帮你 `cd` 到本目录）。
+Windows 下双击 `run.bat` 即可。它会自动 `cd` 到本目录、挑一个真正能用的 Python
+（跳过微软商店的占位程序）、检查依赖是否装齐，然后启动。
+
 命令行启动：
 
-```bash
+```powershell
 cd D:\LLM-Course\Agent\lumen
-python main.py
+py main.py
 ```
+
+> **为什么用 `py` 而不是 `python`？** 在中文 Windows 上，`python` 经常先命中
+> `C:\Users\<你>\AppData\Local\Microsoft\WindowsApps\python.exe` —— 这是微软商店的
+> **占位程序**，敲下去什么都不执行、也不报错，看起来就像「程序没反应」。
+> `py` 是官方启动器，指向真正的解释器。
+> 先查清楚自己在用哪个：
+>
+> ```powershell
+> py -c "import sys; print(sys.executable)"
+> ```
 
 > **为什么必须先 cd？** 文件类工具的沙箱边界、Skill 的扫描起点，都是「启动时的当前工作目录」。
 > 在 `C:\` 下直接跑，等于把整个 C 盘交给模型。
 
 终端太窄或显示异常时，可以退化成纯命令行模式：
 
-```bash
-python main.py --cli
+```powershell
+py main.py --cli
 ```
 
 建议终端宽度 ≥ 100 列（右侧面板固定占 46 列）。
 
 自检（不需要 API Key，验证界面能否正常挂载与交互）：
 
-```bash
-python smoke_tui.py
+```powershell
+py smoke_tui.py
 ```
+
+> `tui` 不是一个单独的文件，而是一个**目录**：`tui/app.py`（界面逻辑）+ `tui/app.tcss`（样式）。
+> 没有「tui 文件」是正常的。
 
 ### 4. 加自己的 Skill
 
@@ -549,12 +564,31 @@ Skill 目录要在**启动时的工作目录**下的 `.agents\skills\`。先 `cd
 换支持中文的等宽字体（Windows Terminal 推荐「等距更纱黑体」或「Cascadia Mono + 微软雅黑」组合），
 并把终端编码设为 UTF-8。
 
+**Q：敲 `python main.py` 完全没反应，既没界面也没报错**
+八成命中了微软商店的占位程序。验证一下：
+
+```powershell
+python --version        # 无输出 = 占位程序
+py --version            # 有版本号 = 真的解释器
+```
+
+改用 `py main.py`，或者直接双击 `run.bat`。
+
 **Q：`python main.py` 一闪就退出（窗口关了，看不到报错）**
 在命令行里手动跑，别双击。依次确认：
 
-1. `python -m pip install -r requirements.txt` 是否成功 —— 缺 `textual` 会退化成 CLI，缺 `openai` 会直接报错；
-2. `python smoke_tui.py` 能否 14 项全过 —— 不能的话把第一条 FAIL 的原文发出来；
-3. `echo %CD%` 是否就是 `lumen` 目录 —— 路径不对会导致找不到 `core` 包。
+1. `pip install -r requirements.txt` 是否成功 —— 缺 `textual` 会退化成 CLI，缺 `openai` 会直接报错；
+2. `py smoke_tui.py` 能否 14 项全过 —— 不能的话把第一条 FAIL 的原文发出来；
+3. `pwd`（PowerShell 里是 `Get-Location`）是否就是 `lumen` 目录 —— 路径不对会导致找不到 `core` 包。
+
+**Q：装了依赖但还是说 `No module named 'textual'`**
+装到了一个 Python，跑的是另一个。电脑上同时有 `py`（系统装的那个）和别的 Python 很常见。
+查清楚两边分别是哪个，然后**用同一个**解释器装依赖：
+
+```powershell
+py -c "import sys; print(sys.executable)"     # 你跑代码用的
+py -m pip install -r requirements.txt         # 就用它装依赖
+```
 
 **Q：`ModuleNotFoundError: No module named 'textual'`**
 依赖没装，或装到了另一个 Python 环境。用 `python -m pip install textual`，
