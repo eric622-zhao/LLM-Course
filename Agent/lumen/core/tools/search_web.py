@@ -30,15 +30,16 @@ API Key 从 config.ini 的 [search] baidu_qianfan_api_key 读取，
 from __future__ import annotations
 
 import re
+import time
 from urllib.parse import urlparse
 
 from core import config
 from ..registry import tool, truncate
 
 ENDPOINT = "https://qianfan.baidubce.com/v2/ai_search/web_search"
-DEFAULT_TOP_K = 8
+DEFAULT_TOP_K = 5
 MAX_TOP_K = 20
-SNIPPET_CHARS = 360
+SNIPPET_CHARS = 240
 RECENCY_VALUES = ("week", "month", "semiyear", "year")
 
 
@@ -78,6 +79,51 @@ def _site_of(url: str) -> str:
         return ""
 
 
+# 接口偶尔会把站名填成「无」「-」这类占位，直接展示会污染给模型的上下文
+_PLACEHOLDER_SITE = {"无", "-", "—", "未知", "null", "none", "n/a"}
+
+
+def _clean_site(value: str) -> str:
+    text = (value or "").strip()
+    return "" if text.lower() in _PLACEHOLDER_SITE else text
+
+
+def _looks_like_json(text: str) -> bool:
+    """有的结果 title 会把整段控制数据当标题返回（形如 {"code":0,...）。"""
+    head = text.lstrip()[:40]
+    if not head.startswith(("{", "[")):
+        return False
+    return '"code"' in text[:200] or '"stg_version"' in text[:200] or '"strategy_result"' in text[:400]
+
+
+def _first_sentence(text: str, limit: int = 60) -> str:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if not text:
+        return ""
+    for sep in ("。", "！", "？", ". ", "\n"):
+        cut = text.find(sep)
+        if 0 < cut <= limit:
+            return text[:cut].strip()
+    return text[:limit].strip()
+
+
+def _clean_title(title: str, content: str, site: str, url: str) -> str:
+    """标题是垃圾串 / 空 / 占位时，用正文首句兜底，保证模型看到的是人话。"""
+    text = (title or "").strip()
+    bad = (
+        not text
+        or text.lower() in _PLACEHOLDER_SITE
+        or _looks_like_json(text)
+        or len(text) < 4
+    )
+    if not bad:
+        return text
+    fallback = _first_sentence(content)
+    if fallback:
+        return fallback
+    return site or _site_of(url) or "（无标题）"
+
+
 def _error_from_body(status: int, body: str) -> str:
     """把接口返回的错误体翻译成模型能据此行动的说明。"""
     detail = re.sub(r"\s+", " ", body or "").strip()
@@ -102,6 +148,62 @@ def _error_from_body(status: int, body: str) -> str:
     )
 
 
+# 通道尝试顺序：先按系统环境（本机多半配了代理），再绕过代理直连，最后再回代理一次。
+# 国内 API 经境外代理转发常常更慢甚至直接失败，两条路都试比赌一条稳。
+_CHANNELS = ((True, "系统代理"), (False, "直连"), (True, "系统代理"))
+
+
+def _post_with_retry(requests, payload: dict, api_key: str, timeout: int):
+    """带通道切换与退避的 POST。
+
+    返回 (response, None) 表示拿到 HTTP 响应（状态码由调用方判断）；
+    返回 (None, 错误说明) 表示连网络层都没打通。
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    errors: list[str] = []
+    # 三个通道不共享 25 秒的超时，否则全挂时要干等 75 秒。
+    # 给整体一个预算，每个通道按剩余时间收窄。
+    deadline = time.monotonic() + timeout * 2
+
+    for index, (trust_env, label) in enumerate(_CHANNELS):
+        remaining = deadline - time.monotonic()
+        if index and remaining < 8:
+            errors.append(f"{label}：跳过（总耗时预算已用尽）")
+            continue
+        if index:
+            time.sleep(0.6 * index)
+        budget = int(min(timeout, max(8, remaining)))
+        session = requests.Session()
+        # trust_env=False 时 requests 不看 HTTP(S)_PROXY，等于强制直连
+        session.trust_env = trust_env
+        try:
+            return session.post(
+                ENDPOINT, json=payload, headers=headers, timeout=(5, budget)
+            ), None
+        except requests.exceptions.Timeout:
+            errors.append(f"{label}：超时（>{budget}s）")
+        except requests.exceptions.SSLError as exc:  # 是 ConnectionError 的子类，必须排在前面
+            errors.append(f"{label}：SSL 失败（{type(exc).__name__}）")
+        except requests.exceptions.ConnectionError as exc:
+            errors.append(f"{label}：连接失败（{type(exc).__name__}）")
+        except requests.exceptions.RequestException as exc:
+            errors.append(f"{label}：{type(exc).__name__}")
+        finally:
+            session.close()
+
+    return None, (
+        f"错误：联网搜索连不上（已自动尝试代理 / 直连共 {len(_CHANNELS)} 次，全部失败）。\n"
+        f"各通道情况：{'；'.join(errors)}\n"
+        f"重要：这是**网络故障，不等于没有搜到结果**。不要因为这个报错去更换关键词反复重试 —— "
+        f"换词只会得到同样的网络错误，还会浪费轮次。\n"
+        f"建议：如实告知用户联网搜索暂时不可用、稍后再试；"
+        f"如果已知具体网址，可以改用 fetchWeb 打开该网页。"
+    )
+
+
 @tool(
     name="searchWeb",
     description=(
@@ -110,6 +212,8 @@ def _error_from_body(status: int, body: str) -> str:
         "或者你不确定答案、需要外部依据时。拿到结果后如果某个来源看起来最权威，"
         "可以再用 fetchWeb 打开该 URL 读全文。"
         "注意：query 应简短精准（不超过 72 个字符，汉字算 2 个），不要整段粘贴长文。"
+        "如果返回的是网络/鉴权类错误，说明工具暂时不可用，请直接告知用户，"
+        "不要换关键词反复调用 —— 换词不会改变错误原因。"
     ),
     parameters={
         "type": "object",
@@ -175,28 +279,9 @@ def search_web(args: dict) -> str:
 
     timeout = config.get_int("tools", "search_timeout", 25)
 
-    try:
-        resp = requests.post(
-            ENDPOINT,
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=(6, timeout),
-        )
-    except requests.exceptions.Timeout:
-        return f"错误：搜索请求超时（{timeout} 秒）。可能是网络不稳定或搜索服务繁忙，可以稍后重试一次。"
-    except requests.exceptions.SSLError as exc:
-        return f"错误：搜索服务 SSL 连接失败 — {exc}"
-    except requests.exceptions.ConnectionError as exc:
-        return (
-            f"错误：无法连接搜索服务（{ENDPOINT}）。\n"
-            f"这通常是本机网络或代理问题：{type(exc).__name__}。\n"
-            f"建议：如实告知用户联网搜索暂时不可用。"
-        )
-    except requests.exceptions.RequestException as exc:
-        return f"错误：搜索请求失败 — {type(exc).__name__}: {exc}"
+    resp, failure = _post_with_retry(requests, payload, api_key, timeout)
+    if resp is None:
+        return failure
 
     if resp.status_code != 200:
         return _error_from_body(resp.status_code, resp.text)
@@ -214,7 +299,7 @@ def search_web(args: dict) -> str:
             f"建议：如果是鉴权或权限类错误，直接告知用户需要检查 API Key 与服务开通状态，不要重复调用。"
         )
 
-    # --- 解析摘要 ---
+    # --- 解析摘要（有的版本带 choices，有的只给 references）---
     summary = ""
     choices = data.get("choices") or []
     if isinstance(choices, list) and choices:
@@ -230,22 +315,36 @@ def search_web(args: dict) -> str:
         or []
     )
     sources: list[dict] = []
+    seen_urls: set[str] = set()
     if isinstance(raw_refs, list):
         for item in raw_refs:
             if not isinstance(item, dict):
                 continue
             url = _pick(item, "url", "link", "href")
-            title = _pick(item, "title", "name")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+
+            site = _clean_site(_pick(item, "website", "site", "site_name")) or _site_of(url)
             content = _pick(item, "content", "snippet", "summary", "abstract", "text")
+            if not content:
+                content = _pick(item, "markdown_content")
+            title = _clean_title(_pick(item, "title", "name"), content, site, url)
             if not url and not title:
                 continue
+
+            date = _pick(item, "date", "page_time", "publish_time", "time")
+            if date:
+                date = date.split(" ")[0]  # 只留日期，省 token
+
             sources.append(
                 {
-                    "title": title or _site_of(url) or "（无标题）",
+                    "title": title,
                     "url": url,
                     "content": content,
-                    "date": _pick(item, "date", "page_time", "publish_time", "time"),
-                    "site": _pick(item, "website", "site", "site_name") or _site_of(url),
+                    "date": date,
+                    "site": site,
                 }
             )
 
@@ -276,7 +375,7 @@ def search_web(args: dict) -> str:
         lines.append("")
 
     if sources:
-        lines.append("【参考来源】")
+        lines.append("【参考来源】（按相关度从高到低，第 1 条最相关）")
         for index, src in enumerate(sources, 1):
             lines.append(f"{index}. {src['title']}")
             if src["site"]:
@@ -293,6 +392,8 @@ def search_web(args: dict) -> str:
     lines.append(
         "使用建议：以上是搜索结果的原文摘录，可能含过时或不准确的信息。"
         "回答时请注明来源，必要时先用 fetchWeb 打开其中最相关的一两条核对。"
+        "如果前 3 条都与问题无关，说明这次确实没搜到匹配内容 —— "
+        "最多换一次更宽泛的关键词，仍无结果就如实告诉用户没有找到，不要连续换词空转。"
     )
 
     return "\n".join(lines).strip()
