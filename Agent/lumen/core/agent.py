@@ -32,7 +32,6 @@ from core.registry import dispatch, schemas
 import core.tools  # noqa: F401,E402
 
 BASE_SYSTEM_PROMPT = """你是「流明」（Lumen），一个可以调用工具的 AI 助手，运行在用户本机的命令行环境中。
-
 工作原则：
 1. 需要事实、数据、时间、文件内容时，先调用工具查证，不要凭记忆编造。
 2. 用户问时间相关的问题，用 getLocalTime；问闰年，用 isLeapYear。
@@ -59,6 +58,19 @@ BASE_SYSTEM_PROMPT = """你是「流明」（Lumen），一个可以调用工具
 """
 
 
+def _first_non_ascii(text: str) -> int:
+    """返回第一个非 ASCII 字符的下标；全是 ASCII 则返回 -1。
+
+    HTTP 头的值只能是 ASCII。配置里混入中文（最常见的是没改的占位符
+    「sk-替换成你的key」）会在发请求时炸成 UnicodeEncodeError，
+    报错信息只说 position N，完全看不出是配置没填 —— 所以提前查出来。
+    """
+    for index, char in enumerate(text):
+        if ord(char) > 127:
+            return index
+    return -1
+
+
 class Agent:
     """带工具、支持流式的对话 Agent。"""
 
@@ -73,13 +85,33 @@ class Agent:
     ) -> None:
         from openai import OpenAI
 
-        api_key = config.get("llm", "api_key") or ""
-        base_url = config.get("llm", "base_url") or None
-        self.model = config.get("llm", "model") or "gpt-4o-mini"
+        api_key = (config.get("llm", "api_key") or "").strip()
+        base_url = (config.get("llm", "base_url") or "").strip() or None
+        self.model = (config.get("llm", "model") or "").strip() or "gpt-4o-mini"
         self.temperature = config.get_float("llm", "temperature", 0.7)
         self.max_rounds = config.get_int("agent", "max_tool_rounds", 12)
 
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        # 配置体检：有问题就记下来，ask() 时一次性说清楚，而不是让 SDK 抛出
+        # 一句「ascii codec can't encode ...」让用户去猜。
+        problems: list[str] = []
+        if config.missing_or_placeholder(api_key):
+            problems.append("config.ini 的 [llm] api_key 还没填写")
+            api_key = ""  # 占位符里的中文绝不能进 Authorization 头
+        elif _first_non_ascii(api_key) >= 0:
+            problems.append("[llm] api_key 含非 ASCII 字符（像是没替换干净的占位符）")
+
+        for label, value in (("base_url", base_url or ""), ("model", self.model)):
+            position = _first_non_ascii(value)
+            if position >= 0:
+                problems.append(
+                    f"[llm] {label} 含非 ASCII 字符（第 {position} 位起：{value[position:position + 8]!r}）"
+                )
+
+        self.config_problem = "；".join(problems)
+
+        # 传一个 ASCII 占位值：空字符串在不同 openai 版本里行为不一致，
+        # 而真正的拦截在 ask() 里，不会走到网络。
+        self.client = OpenAI(api_key=api_key or "not-configured", base_url=base_url)
 
         self.on_delta = on_delta
         self.on_tool_call = on_tool_call
@@ -113,6 +145,13 @@ class Agent:
         overrides 可以临时替换 on_delta / on_tool_call / on_tool_result 回调
         （TUI 里每个气泡各自绑自己的回调时会用到）。
         """
+        if self.config_problem:
+            raise RuntimeError(
+                f"{self.config_problem}。\n"
+                f"配置文件：{config.CONFIG_PATH}\n"
+                f"请填好 [llm] 的 api_key / base_url / model 后重启。"
+            )
+
         on_delta = overrides.get("on_delta", self.on_delta)
         on_tool_call = overrides.get("on_tool_call", self.on_tool_call)
         on_tool_result = overrides.get("on_tool_result", self.on_tool_result)

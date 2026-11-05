@@ -234,6 +234,9 @@ class LumenApp(App):
             self._init_error = f"{type(exc).__name__}: {exc}"
             self._set_status("初始化失败")
             self._show_error(self._init_error)
+        else:
+            if self.agent.config_problem:
+                self._set_status("未配置")
         self.query_one("#prompt", Input).focus()
         self._refresh_stats()
 
@@ -279,6 +282,16 @@ class LumenApp(App):
             await self._system_note(
                 f"无法发起请求：{self._init_error or 'Agent 未初始化'}\n"
                 f"请检查 config.ini 的 api_key / base_url / model，以及依赖是否装齐（pip install -r requirements.txt）。"
+            )
+            return
+
+        if self.agent.config_problem:
+            await self._system_note(
+                f"还没配置好，发不出去：{self.agent.config_problem}。\n"
+                f"打开 {config.CONFIG_PATH} 填好再重开：\n"
+                f"  api_key  —— 你的密钥（占位符里的中文会被当成请求头，必然失败）\n"
+                f"  base_url —— 用 DeepSeek 就填 https://api.deepseek.com/v1\n"
+                f"  model    —— 要和平台对上，比如 deepseek-chat"
             )
             return
 

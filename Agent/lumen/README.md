@@ -528,6 +528,14 @@ def _char_width(ch): return 2 if unicodedata.east_asian_width(ch) in ("W", "F") 
 **Q：报「api_key 还没填写」**
 `config.ini` 里 `[llm] api_key` 还是占位符。填上真实的 key。
 
+**Q：报 `UnicodeEncodeError: 'ascii' codec can't encode characters in position ...`**
+配置里混进了中文。HTTP 请求头只能是 ASCII，而最常见的来源就是
+`api_key = sk-替换成你的key` 这一行没改 —— 汉字原样进了 `Authorization: Bearer ...`，
+于是报一个位置号，完全看不出是配置问题。
+
+现在 `Agent` 在启动时就会体检，遇到占位符或非 ASCII 的 `api_key` / `base_url` / `model`
+会直接告诉你哪一项不对，不再把中文发到网络上。
+
 **Q：报 `404 model not found`**
 `model` 名字和 `base_url` 对应的平台不一致。比如 DeepSeek 要用 `deepseek-chat`。
 

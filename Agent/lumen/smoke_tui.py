@@ -74,7 +74,7 @@ async def main():
         check("/tools 命令有回显", "getLocalTime" in log_text or "可用工具" in log_text,
               log_text[-60:].replace("\n", " "))
 
-        # 5. 提问（会真的请求网络，预期失败但要优雅）
+        # 5. 提问：配置不全时应被拦下来，而不是抛 UnicodeEncodeError
         app.query_one("#prompt").focus()
         await pilot.press(*list("你好"))
         await pilot.press("enter")
@@ -83,7 +83,15 @@ async def main():
             await asyncio.sleep(0.25)
             if not app._busy:
                 break
-        check("提问后回到就绪（无 key 时应给出错误而非卡死）", not app._busy)
+        check("提问后回到就绪", not app._busy)
+
+        log_text = "\n".join(str(w.render()) for w in app.query("#log > *"))
+        if app.agent is not None and app.agent.config_problem:
+            check(
+                "缺配置时给出可操作提示（不是编码错误）",
+                "api_key" in log_text and "ascii" not in log_text.lower(),
+                "提示已显示" if "api_key" in log_text else log_text[-70:].replace("\n", " "),
+            )
 
         # 6. Ctrl+L 清空
         await pilot.press("ctrl+l")
