@@ -34,7 +34,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Input, Markdown, Static
 
-from core import __version__, config
+from core import __version__, config, report
 from core.agent import Agent
 from core.registry import TOOLS
 
@@ -295,18 +295,14 @@ class LumenApp(App):
             self.action_help()
             return
         if lowered == "/tools":
-            await self._system_note("可用工具：" + "、".join(TOOLS))
+            await self._system_note(report.tools_report())
             return
         if lowered == "/skills":
-            if not self.skills:
-                await self._system_note(
-                    f"当前没有 Skill。把技能放到 {self.project_root}\\.agents\\skills\\<名称>\\SKILL.md 后重启。"
-                )
-            else:
-                lines = [f"已加载 {len(self.skills)} 个 Skill："]
-                lines += [f"  {name}  —  {desc}" for name, desc in self.skills]
-                lines.append("（正文由模型按需调 loadSkill 读取）")
-                await self._system_note("\n".join(lines))
+            from core import skills as skills_mod
+
+            registry = skills_mod.get_registry()
+            info = registry.describe() if registry is not None else self.skills
+            await self._system_note(report.skills_report(info))
             return
         if lowered == "/mcp":
             await self._show_mcp()

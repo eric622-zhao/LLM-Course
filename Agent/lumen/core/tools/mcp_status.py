@@ -23,7 +23,7 @@ from ..registry import tool
     ),
     parameters={"type": "object", "properties": {}, "required": []},
     title="MCP 状态",
-    category="MCP",
+    category="MCP 管理",
 )
 def mcp_status(_args: dict) -> str:
     if not MCP_AVAILABLE:

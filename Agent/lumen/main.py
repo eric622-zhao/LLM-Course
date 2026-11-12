@@ -41,7 +41,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from core import __version__, agent_md, config, mcp_client, skills, tracing  # noqa: E402
+from core import __version__, agent_md, config, mcp_client, report, skills, tracing  # noqa: E402
 from core.agent import Agent  # noqa: E402
 import core.tools  # noqa: E402,F401  —— 导入即注册所有工具
 from core.registry import TOOLS  # noqa: E402
@@ -240,6 +240,8 @@ def run_cli(boot: Boot) -> int:
             continue
         if lowered == "/help":
             print(
+                "  /tools          按来源分组列出全部工具\n"
+                "  /skills         列出已发现的 Skill\n"
                 "  /clear          清空上下文\n"
                 "  /mcp            查看 MCP server 状态\n"
                 "  /rules          查看已注入的 AGENT.md\n"
@@ -248,8 +250,18 @@ def run_cli(boot: Boot) -> int:
                 "  /load <id|last> 恢复某个会话\n"
                 "  /new            开始新会话\n"
                 "  /trace          本次运行的调用统计\n"
-                "  /exit           退出"
+                "  /help           显示这份命令表\n"
+                "  /exit           退出（也可用 /quit）"
             )
+            continue
+        if lowered == "/tools":
+            print(report.tools_report())
+            continue
+        if lowered == "/skills":
+            # 从注册表现场取，createSkill 新建的技能能立刻看到（boot.skills_info 是启动时的快照）
+            registry = skills.get_registry()
+            info = registry.describe() if registry is not None else boot.skills_info
+            print(report.skills_report(info))
             continue
         if lowered == "/mcp":
             print("MCP：" + (boot.mcp.summary() if boot.mcp else "未启动"))

@@ -72,7 +72,7 @@
         │       ├── create_skill.py createSkill：技能落盘
         │       └── mcp_status.py mcpStatus：MCP 连接状态
         ├── .agents/skills/       示例 Skill（weekly-report / repo-checkup / demo-rule-check）
-        ├── tests/                离线单测 37 项 + 测试用 MCP server
+        ├── tests/                离线单测 48 项 + 测试用 MCP server
         ├── tui/                  表现层
         │   ├── app.py            Textual App
         │   └── app.tcss          样式表

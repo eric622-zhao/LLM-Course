@@ -238,6 +238,7 @@ lumen/
 │   ├── mcp_client.py        MCP 客户端：stdio / HTTP 传输、schema 转换、失败降级
 │   ├── session.py           会话持久化（.lumen/sessions/*.json）
 │   ├── tracing.py           调用追踪（.lumen/traces/*.jsonl）
+│   ├── report.py            清单渲染：/tools 与 /skills（CLI 与 TUI 共用）
 │   └── tools/
 │       ├── __init__.py      导入即注册
 │       ├── system.py        getLocalTime、isLeapYear
@@ -251,9 +252,10 @@ lumen/
 ├── tui/                     表现层 —— 只负责显示与输入
 │   ├── app.py              Textual App：布局、事件、线程回调
 │   └── app.tcss            样式表
-├── tests/                   离线单测（37 项，不需要 API Key）
+├── tests/                   离线单测（48 项，不需要 API Key）
 │   ├── test_agent_features.py   规则 / 会话 / 压缩 / 技能创建
 │   ├── test_search_web.py       搜索解析与降级
+│   ├── test_report.py           /tools 与 /skills 的清单渲染
 │   └── fixtures/echo_server.py  最小 MCP server，用于端到端验证
 ├── smoke_tui.py             界面冒烟测试（17 项）
 ├── .agents/skills/          示例 Skill（随项目启动自动发现）
@@ -563,6 +565,9 @@ copy mcp.example.json mcp.json
 | `/new` | 开始新会话 |
 | `/trace` | 本次运行的请求数 / 工具调用数 / 错误数 |
 | `/clear` | 同 `Ctrl+L` |
+
+`--cli` 纯文本模式支持除 `F1` / `Ctrl+L` / `Ctrl+Q` 之外的全部同名命令，
+两条界面走的是同一份实现，不会出现「TUI 有这个命令、CLI 没有」的偏差。
 
 对话区里每条工具调用都会留痕：
 
@@ -1027,7 +1032,7 @@ except ImportError:  # mcp 1.x
 | --- | --- | --- | --- |
 | 1 | 环境自检 | `py -c "import sys; print(sys.executable)"` | 输出真实解释器路径，不是 `WindowsApps` 下的占位程序 |
 | 2 | 依赖齐全 | `py -c "import textual, openai, mcp"` | 无报错 |
-| 3 | 离线单测 | `py -m unittest discover -s tests -v` | `Ran 37 tests ... OK` |
+| 3 | 离线单测 | `py -m unittest discover -s tests -v` | `Ran 48 tests ... OK` |
 | 4 | 界面与命令 | `py smoke_tui.py` | `通过 17/17` |
 | 5 | 真实对话 | `py main.py` → 问「现在几点」 | 模型调用 `getLocalTime` 并回填结果 |
 | 6 | AGENT.md 生效 | 在项目根写 `AGENT.md` 写上「回答以『收到』开头」→ 重启 → 随便问 | 回答以「收到」开头；`/rules` 能看到规则内容 |
