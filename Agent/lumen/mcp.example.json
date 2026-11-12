@@ -1,0 +1,33 @@
+{
+  "_readme": [
+    "MCP server 配置。复制本文件为 mcp.json 后按需修改；没有 mcp.json 时不会连接任何 server。",
+    "JSON 不支持注释，所以用下划线开头的键写说明，程序会忽略这些键。",
+    "stdio：本地进程。command 是程序名，args 是参数，cwd 可选（相对项目根目录）。",
+    "http ：连已启动的 HTTP server，url 指向它的 MCP 端点（streamable HTTP）。",
+    "env / headers 支持 ${VAR} 引用环境变量，避免把密钥写进文件后被提交。",
+    "enabled 设成 false 可临时关闭某个 server，不必删配置。"
+  ],
+  "mcpServers": {
+    "echo-demo": {
+      "transport": "stdio",
+      "command": "py",
+      "args": ["tests/fixtures/echo_server.py"],
+      "enabled": true
+    },
+    "pethospital": {
+      "transport": "stdio",
+      "command": "py",
+      "args": ["server.py"],
+      "cwd": "../../PetHospitalMCP",
+      "enabled": false
+    },
+    "remote-example": {
+      "transport": "http",
+      "url": "http://127.0.0.1:8091/mcp",
+      "headers": {
+        "Authorization": "Bearer ${REMOTE_MCP_TOKEN}"
+      },
+      "enabled": false
+    }
+  }
+}

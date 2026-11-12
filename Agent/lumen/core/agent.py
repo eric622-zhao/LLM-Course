@@ -22,6 +22,8 @@ core.agent · Function Calling 主循环
 
 from __future__ import annotations
 
+import json
+import time
 from typing import Callable
 
 from core import config
@@ -55,7 +57,30 @@ BASE_SYSTEM_PROMPT = """你是「流明」（Lumen），一个可以调用工具
 12. System Prompt 末尾可能会列出可用 Skill（只有名称和一句话描述）。当用户的任务与某个 Skill 的描述相符时，
     必须先调 loadSkill 读取该 Skill 的完整说明，再严格按照说明执行；不要凭猜测使用技能。
 13. 如果 Skill 说明里提到参考文件或脚本，用 loadSkill 带上 filename 读取它，不要假设其内容。
+14. 当你完成了一套以后还会复用的多步流程，或用户说「记住这个做法」「以后都这么做」时，
+    用 createSkill 把它沉淀成技能：name 用小写字母和短横线，description 写清「什么情况下该用它」。
+    不要为一次性任务创建技能。
+
+MCP 外部工具：
+15. 名字以 mcp__ 开头、描述里带「[MCP · server]」的工具来自外部 MCP server，不是本机内置能力。
+    调用前先确认参数符合它的 schema，不要凭名字猜功能。
+16. 如果某个 mcp__ 工具报「不可用」或「未连接」，用 mcpStatus 查一次原因，然后把结论如实告诉用户；
+    不要反复调用同一个失败的 MCP 工具，也不要假装它成功了。
+
+项目规则：
+17. 如果 System Prompt 里有 <project_rules> 段落，那是本项目 AGENT.md 里的长期约定，
+    在所有回复中都要遵守；它与用户当轮指令冲突时，以用户当轮指令为准并说明冲突。
 """
+
+
+def _tracer():
+    """取全局追踪器。追踪是可选的，任何异常都不该影响对话。"""
+    try:
+        from core import tracing
+
+        return tracing.get()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _first_non_ascii(text: str) -> int:
@@ -82,6 +107,9 @@ class Agent:
         on_tool_call: Callable[[str, str], None] | None = None,
         on_tool_result: Callable[[str, str, int], None] | None = None,
         on_reasoning: Callable[[str], None] | None = None,
+        system_provider: Callable[[], str] | None = None,
+        session_store: object | None = None,
+        session_id: str = "",
     ) -> None:
         from openai import OpenAI
 
@@ -118,19 +146,159 @@ class Agent:
         self.on_tool_result = on_tool_result
         self.on_reasoning = on_reasoning
 
-        system = (system_prompt or BASE_SYSTEM_PROMPT).strip()
-        if extra_system.strip():
-            system = f"{system}\n\n{extra_system.strip()}"
-        self.system_prompt = system
+        self._base_system = (system_prompt or BASE_SYSTEM_PROMPT).strip()
+        self._extra_system = extra_system.strip()
+        # 技能清单会随 createSkill 变化，所以 System Prompt 允许按需重建，
+        # 而不是启动时算一次就锁死。
+        self._system_provider = system_provider
+        self._compressed_note = ""
+        self.system_prompt = self._compose_system()
 
         self.messages: list[dict] = [{"role": "system", "content": self.system_prompt}]
         self.total_tokens = 0
+        self.turns = 0
+
+        # 上下文保护：消息总字符超限时压缩早期内容（见 compress_if_needed）
+        self.max_context_chars = config.get_int("agent", "max_context_chars", 100_000)
+        self.keep_recent = config.get_int("agent", "keep_recent_messages", 8)
+
+        self.session_store = session_store
+        self.session_id = session_id
+
+    # ------------------------------------------------------------------
+    # System Prompt 组装
+    # ------------------------------------------------------------------
+    def _compose_system(self) -> str:
+        """基础人设 + 外部注入（技能/规则）+ 历史压缩摘要。"""
+        if self._system_provider is not None:
+            try:
+                text = (self._system_provider() or "").strip()
+            except Exception:  # noqa: BLE001 - 组装失败退回基础人设
+                text = ""
+            if not text:
+                text = self._base_system
+        else:
+            text = self._base_system
+            if self._extra_system:
+                text = f"{text}\n\n{self._extra_system}"
+
+        if self._compressed_note:
+            text = f"{text}\n\n{self._compressed_note}"
+        return text
+
+    def refresh_system(self) -> bool:
+        """重建 System Prompt（技能清单变了就调用）。返回是否发生变化。"""
+        new_system = self._compose_system()
+        if self.messages and self.messages[0].get("content") == new_system:
+            return False
+        self.system_prompt = new_system
+        if self.messages:
+            self.messages[0]["content"] = new_system
+        return True
 
     # ------------------------------------------------------------------
 
     def reset(self) -> None:
         """清空上下文，保留 System Prompt。"""
+        self._compressed_note = ""
+        self.system_prompt = self._compose_system()
         self.messages = [{"role": "system", "content": self.system_prompt}]
+        self.turns = 0
+
+    # ------------------------------------------------------------------
+    # 上下文压缩
+    # ------------------------------------------------------------------
+    def _context_chars(self) -> int:
+        """粗略估算上下文长度。字符数比 token 好算，量级判断够用了。"""
+        total = 0
+        for message in self.messages:
+            content = message.get("content")
+            if isinstance(content, str):
+                total += len(content)
+            for call in message.get("tool_calls") or []:
+                total += len(json.dumps(call, ensure_ascii=False))
+        return total
+
+    def compress_if_needed(self) -> str:
+        """超限时把早期对话折叠成一段摘要，返回给用户看的说明（没压缩返回空串）。
+
+        三条约束：
+        1. **不能切在工具调用中间** —— 留下孤立的 role=tool 消息，
+           下一次请求会被 API 直接拒绝（tool_call_id 找不到对应的 tool_calls）。
+           所以切点必须往前退到非 tool 消息。
+        2. 摘要不调 LLM（省钱、离线也能用），只统计用户问过什么、用过哪些工具。
+        3. 摘要并进 System Prompt，而不是伪造一条 user/assistant 消息 ——
+           后者会污染对话语义。
+        """
+        limit = self.max_context_chars
+        if limit <= 0:
+            return ""
+
+        before = self._context_chars()
+        if before <= limit:
+            return ""
+
+        keep = max(2, self.keep_recent)
+        cut = len(self.messages) - keep
+        while cut > 1 and self.messages[cut].get("role") == "tool":
+            cut -= 1
+        if cut <= 1:
+            return ""  # 剩下的就是最近几轮，再压就没内容了
+
+        dropped = self.messages[1:cut]
+        kept = self.messages[cut:]
+
+        asks: list[str] = []
+        tool_counts: dict[str, int] = {}
+        errors = 0
+        for message in dropped:
+            role = message.get("role")
+            if role == "user":
+                text = str(message.get("content") or "").strip()
+                if text:
+                    asks.append(text[:40] + ("…" if len(text) > 40 else ""))
+            elif role == "tool":
+                if str(message.get("content") or "").startswith("错误："):
+                    errors += 1
+            for call in message.get("tool_calls") or []:
+                name = (call.get("function") or {}).get("name") or "?"
+                tool_counts[name] = tool_counts.get(name, 0) + 1
+
+        lines = [
+            "## 历史对话摘要（系统自动压缩）",
+            f"更早的 {len(dropped)} 条消息已折叠，以腾出上下文空间。以下是要点，"
+            f"如需细节请让用户重新提问或重新读取文件。",
+        ]
+        if asks:
+            lines.append("用户依次问过：")
+            lines.extend(f"  {index}. {text}" for index, text in enumerate(asks[-8:], 1))
+        if tool_counts:
+            used = "、".join(f"{name}×{count}" for name, count in sorted(tool_counts.items(), key=lambda x: -x[1]))
+            lines.append(f"调用过的工具：{used}")
+        if errors:
+            lines.append(f"期间出现过 {errors} 次工具报错。")
+
+        note = "\n".join(lines)
+        self._compressed_note = (
+            f"{self._compressed_note}\n\n{note}".strip() if self._compressed_note else note
+        )
+        self.messages = [self.messages[0]] + kept
+        self.refresh_system()
+
+        after = self._context_chars()
+        return f"上下文已压缩：{before} → {after} 字符（折叠 {len(dropped)} 条早期消息）"
+
+    def _auto_save(self) -> None:
+        """每轮结束自动存档，用户不必记得点保存。"""
+        store = self.session_store
+        if store is None:
+            return
+        try:
+            info = store.save(self.messages, self.session_id, model=self.model)
+            if info is not None:
+                self.session_id = info.id
+        except Exception:  # noqa: BLE001 - 存档失败不该影响对话
+            pass
 
     def _callbacks(self) -> dict:
         return {
@@ -156,13 +324,31 @@ class Agent:
         on_tool_call = overrides.get("on_tool_call", self.on_tool_call)
         on_tool_result = overrides.get("on_tool_result", self.on_tool_result)
 
+        # 技能清单可能在上一轮被 createSkill 改过，每轮开始前对齐一次
+        self.refresh_system()
+        self.compress_if_needed()
         self.messages.append({"role": "user", "content": user_input})
+        self.turns += 1
 
-        for _round in range(1, self.max_rounds + 1):
+        tracer = _tracer()
+        if tracer:
+            tracer.turn(self.turns, len(user_input))
+
+        for round_no in range(1, self.max_rounds + 1):
+            started = time.monotonic()
             collected = self._stream_once(on_delta)
+            if tracer:
+                tracer.llm(
+                    round_no,
+                    time.monotonic() - started,
+                    len(collected["text"]),
+                    len(collected["tool_calls"]),
+                    self.total_tokens,
+                )
 
             if not collected["tool_calls"]:
                 self.messages.append({"role": "assistant", "content": collected["text"]})
+                self._auto_save()
                 return collected["text"]
 
             # 模型要调工具：先把「它想调什么」写回历史
@@ -184,13 +370,23 @@ class Agent:
             for call in collected["tool_calls"]:
                 if on_tool_call:
                     on_tool_call(call["name"], call["arguments"])
+                tool_started = time.monotonic()
                 result = dispatch(call["name"], call["arguments"])
+                if tracer:
+                    tracer.tool(
+                        call["name"],
+                        time.monotonic() - tool_started,
+                        len(result),
+                        not result.startswith("错误"),
+                        len(call["arguments"]),
+                    )
                 if on_tool_result:
                     on_tool_result(call["name"], result, len(result))
                 self.messages.append(
                     {"role": "tool", "tool_call_id": call["id"], "content": result}
                 )
 
+        self._auto_save()
         return (
             f"已达到单轮最多 {self.max_rounds} 次工具调用的上限，为避免死循环先停下。\n"
             f"上面的操作可能只完成了一部分，请缩小问题范围后重试。"

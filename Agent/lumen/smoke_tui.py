@@ -32,17 +32,18 @@ def setup():
     config.load()
     from core.tools import file_ops
     file_ops.set_project_root(os.getcwd())
-    from core import skills
+    from core import agent_md, skills
     reg = skills.discover(os.getcwd())
-    return reg.prompt_block(), reg.describe(), reg.warnings
+    rules = agent_md.load(os.getcwd())
+    return reg.prompt_block(), reg.describe(), reg.warnings, rules
 
 
 async def main():
-    extra, skills_info, warnings = setup()
+    extra, skills_info, warnings, rules = setup()
     if warnings:
         print("  Skill 警告：", warnings)
 
-    app = LumenApp(os.getcwd(), extra_system=extra, skills=skills_info,
+    app = LumenApp(os.getcwd(), extra_system=extra, skills=skills_info, rules=rules,
                    warning="config.ini 里的 [llm] api_key 还没填写，提问会失败")
 
     async with app.run_test(size=(120, 40)) as pilot:
@@ -73,6 +74,16 @@ async def main():
         log_text = "\n".join(str(w.render()) for w in app.query("#log > *"))
         check("/tools 命令有回显", "getLocalTime" in log_text or "可用工具" in log_text,
               log_text[-60:].replace("\n", " "))
+
+        # 4b. 新增命令：/mcp 与 /rules 都不能崩，且要有可读回显
+        for cmd, expect in (("/mcp", "MCP"), ("/rules", "规则")):
+            app.query_one("#prompt").focus()
+            await pilot.press(*list(cmd))
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+            text = "\n".join(str(w.render()) for w in app.query("#log > *"))
+            check(f"{cmd} 命令有回显", expect in text, text[-50:].replace("\n", " "))
 
         # 5. 提问：配置不全时应被拦下来，而不是抛 UnicodeEncodeError
         app.query_one("#prompt").focus()

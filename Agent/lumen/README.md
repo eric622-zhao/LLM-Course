@@ -1,6 +1,6 @@
 # 流明 Lumen
 
-> 一个会调工具的终端 AI Agent。第五～七周从「单个脚本」演进到「core + tui 的产品原型」。
+> 一个会调工具的终端 AI Agent。第五～八周从「单个脚本」演进到「core + tui 的产品原型」。
 
 名字取「流明」（lumen，光通量单位）—— 工具调用的本质就是把外部世界的信息取回来，
 照亮模型的上下文，让它能说事实而不是猜。
@@ -9,7 +9,7 @@
 
 ## 一、它现在能做什么
 
-16 个 Function Calling 工具，覆盖四种典型实现范式：
+18 个内置 Function Calling 工具，外加**运行时从 MCP server 动态接入**的工具：
 
 | # | 工具 | 做什么 | 实现方式 |
 | --- | --- | --- | --- |
@@ -29,6 +29,9 @@
 | 14 | `searchWeb` | 联网搜索，返回摘要与来源 | **调百度千帆 AI 搜索 API** |
 | 15 | `RunCli` | 执行任意本地命令行程序 | **subprocess 参数列表 + shell=False** |
 | 16 | `loadSkill` | 按需加载 Skill 说明与附件 | **文件系统 + 白名单边界** |
+| 17 | `createSkill` | 把做法沉淀成技能 | **落盘 frontmatter + 热刷新注册表** |
+| 18 | `mcpStatus` | 查看 MCP server 连接状态 | **读 MCP 客户端状态** |
+| … | `mcp__<server>__<tool>` | 外部 MCP server 提供的工具 | **MCP 客户端：stdio / HTTP** |
 
 前两个正好是「调外部命令」与「自己算」两种范式的对照组：
 
@@ -38,6 +41,15 @@
 > Windows 提示：`date` 在 cmd 里是内置命令且带交互提问，所以 `getLocalTime`
 > 按「PATH 里的 date.exe → `cmd /c date /T` + `time /T` → Python datetime 兜底」
 > 三级降级，并在返回值里注明这次是哪条路取到的。
+
+除工具之外，还有四层「非工具」的机制，都在第八周补齐：
+
+| 机制 | 作用 | 一句话说明 |
+| --- | --- | --- |
+| `AGENT.md` | 项目长期规则 | 启动时读一次，注入 System Prompt；缺失不报错 |
+| MCP 客户端 | 接入别人写的工具 | 配置驱动，stdio / HTTP 两种传输，失败降级 |
+| 会话持久化 | 关掉还能接着聊 | 每轮自动存 JSON，`/sessions` 列出、`/load` 恢复 |
+| 调用追踪 | 事后复盘 | `.lumen/traces/*.jsonl`，记耗时与失败率 |
 
 ---
 
@@ -209,12 +221,17 @@ if not _inside(real, skill_dir):
 
 ```
 lumen/
-├── main.py                  入口：读配置 · 定位项目根目录 · 发现 Skill · 拉起 TUI（--cli 可退化）
+├── main.py                  入口：配置 · 规则 · 技能 · MCP · 会话 · 追踪，然后拉起 TUI（--cli 退化）
+├── AGENT.md                 项目长期规则（启动时注入 System Prompt，本文件即示例）
 ├── core/                    引擎层 —— 可以脱离界面单独跑
 │   ├── config.py            配置读取（config.ini）
 │   ├── registry.py          工具注册表：@tool 装饰器 / schemas() / dispatch() / truncate()
 │   ├── skills.py            Skill 发现、Frontmatter 解析、注入块、安全读取
-│   ├── agent.py             Function Calling 主循环（含流式 tool_calls 归并）
+│   ├── agent_md.py          AGENT.md 读取、截断、包装成 System Prompt 片段
+│   ├── agent.py             Function Calling 主循环（流式 tool_calls 归并 · 上下文压缩）
+│   ├── mcp_client.py        MCP 客户端：stdio / HTTP 传输、schema 转换、失败降级
+│   ├── session.py           会话持久化（.lumen/sessions/*.json）
+│   ├── tracing.py           调用追踪（.lumen/traces/*.jsonl）
 │   └── tools/
 │       ├── __init__.py      导入即注册
 │       ├── system.py        getLocalTime、isLeapYear
@@ -222,13 +239,22 @@ lumen/
 │       ├── fetch_web.py     fetchWeb：curl + trafilatura
 │       ├── search_web.py    searchWeb：百度千帆 AI 搜索
 │       ├── run_cli.py       RunCli：参数列表 + shell=False
-│       └── load_skill.py    loadSkill：按需加载 Skill
+│       ├── load_skill.py    loadSkill：按需加载 Skill
+│       ├── create_skill.py  createSkill：技能落盘 + 校验 + 热刷新
+│       └── mcp_status.py    mcpStatus：MCP 连接状态
 ├── tui/                     表现层 —— 只负责显示与输入
 │   ├── app.py              Textual App：布局、事件、线程回调
 │   └── app.tcss            样式表
+├── tests/                   离线单测（37 项，不需要 API Key）
+│   ├── test_agent_features.py   规则 / 会话 / 压缩 / 技能创建
+│   ├── test_search_web.py       搜索解析与降级
+│   └── fixtures/echo_server.py  最小 MCP server，用于端到端验证
+├── smoke_tui.py             界面冒烟测试（16 项）
 ├── .agents/skills/          示例 Skill（随项目启动自动发现）
 │   ├── weekly-report/       写周报（含 reference/style-guide.md 附件）
-│   └── repo-checkup/        git 仓库体检
+│   ├── repo-checkup/        git 仓库体检
+│   └── demo-rule-check/     模型自己用 createSkill 生成的示例
+├── mcp.example.json         MCP 配置模板（复制成 mcp.json 生效）
 ├── config.example.ini       配置模板（复制成 config.ini 再填 key）
 └── requirements.txt
 ```
@@ -259,6 +285,10 @@ flowchart TB
         AG["agent.Agent<br/>Function Calling 循环"]
         RG["registry<br/>@tool / schemas / dispatch"]
         SK["skills<br/>发现 · Frontmatter · 安全读取"]
+        RULES["agent_md<br/>AGENT.md 长期规则"]
+        MCP["mcp_client<br/>MCP 客户端 · stdio / HTTP"]
+        SES["session<br/>会话持久化"]
+        TR["tracing<br/>JSONL 调用追踪"]
         CF["config<br/>config.ini"]
         subgraph toolimpl["core/tools 工具实现"]
             SYS["system<br/>时间 · 闰年"]
@@ -267,6 +297,8 @@ flowchart TB
             SW["search_web<br/>千帆搜索 API"]
             RC["run_cli<br/>subprocess"]
             LS["load_skill<br/>Skill 加载"]
+            CS["create_skill<br/>Skill 落盘"]
+            MS["mcp_status<br/>连接状态"]
         end
     end
 
@@ -275,9 +307,14 @@ flowchart TB
     OS[("命令行程序<br/>date / git / …")]
     WEB[("互联网")]
     QF[("百度千帆<br/>AI 搜索")]
+    MCPS[("外部 MCP server<br/>stdio 进程 / HTTP 端点")]
 
     M -->|"prompt_block()"| SK
+    M -->|"load() 读一次"| RULES
+    M -->|"start() 连接"| MCP
     M --> APP
+    MCP -->|"tools/list → 动态注册"| RG
+    MCP -->|"JSON-RPC"| MCPS
     APP -->|"ask(prompt)"| AG
     CF -.-> AG
     CF -.-> APP
@@ -285,13 +322,21 @@ flowchart TB
     AG -->|"chat.completions(stream)"| LLM
     LLM -->|"delta.content / delta.tool_calls"| AG
     AG -->|"dispatch(name, args)"| RG
+    AG -->|"每轮自动保存"| SES
+    AG -->|"llm / tool 事件"| TR
+    AG -->|"超限时压缩"| AG
     RG --> SYS
     RG --> FO
     RG --> FW
     RG --> SW
     RG --> RC
     RG --> LS
+    RG --> CS
+    RG --> MS
+    CS -->|"写 SKILL.md"| FS
+    CS -->|"热刷新"| SK
     LS -->|"只能读 Skill 目录内"| SK
+    MS -->|"读状态"| MCP
     FW -->|"curl 参数列表"| WEB
     SW -->|"HTTPS + Bearer"| QF
     RC -->|"argv + shell=False"| OS
@@ -407,14 +452,57 @@ mkdir .agents\skills\my-skill
 新建 `.agents\skills\my-skill\SKILL.md`，写上 Frontmatter（`name` + `description`）和正文，
 重启即可 —— 不注册、不改代码，`loadSkill` 会自动多出一个可选项。
 
+也可以直接让模型自己建：说「把这个做法记成技能，叫 xxx」，它会调 `createSkill`
+把目录和 SKILL.md 写好，并在当前会话里立刻可用。
+
+### 5. 加项目规则（AGENT.md）
+
+在**启动目录**（项目根）新建 `AGENT.md`，写进去的内容会作为长期规则注入 System Prompt：
+
+```markdown
+# 项目规则
+
+- 回答用中文，先给结论。
+- 改完 core/ 下的代码必须跑 py -m unittest discover -s tests -v。
+- 不要修改 config.ini。
+```
+
+用 `/rules` 可以确认有没有被读到。不想要就删掉文件，或设 `[agent] rules_enabled = false`。
+
+### 6. 接一个 MCP server（可选）
+
+```bash
+copy mcp.example.json mcp.json
+```
+
+编辑 `mcp.json`，把 `enabled` 改成 `true` 并填上启动命令。仓库里自带一个最小示例：
+
+```json
+{
+  "mcpServers": {
+    "echo-demo": {
+      "transport": "stdio",
+      "command": "py",
+      "args": ["tests/fixtures/echo_server.py"]
+    }
+  }
+}
+```
+
+启动后侧栏会出现 MCP 区块，`/mcp` 查看状态。连上之后，它的工具会以
+`mcp__echo-demo__echo` 的形式出现在工具清单里，模型可以直接调用。
+
+没有 `mcp.json` 时完全不连接任何 server，不影响其它功能。
+
 ---
 
 ## 七、界面与快捷键
 
 ```
-┌ ◆ 流明 LUMEN ──────────────── model · 16 个工具 · 2 个 Skill · v0.7.0 ┐
+┌ ◆ 流明 LUMEN ───────────── model · 18 个工具 · 2 个 Skill · v0.8.0 ┐
 ├───────────────────────────────────────┬──────────────────────────────┤
-│ 对话区（气泡 + 工具调用轨迹）          │ 可用工具 / Skills / 状态      │
+│ 对话区（气泡 + 工具调用轨迹）          │ 可用工具 / Skills / 项目规则  │
+│                                       │ / MCP / 状态                 │
 ├───────────────────────────────────────┴──────────────────────────────┤
 │ » 问点什么…（Enter 发送）                                            │
 └──────────────────────────────────────────────────────────────────────┘
@@ -426,8 +514,15 @@ mkdir .agents\skills\my-skill
 | `Ctrl+L` | 清空上下文（保留 System Prompt） |
 | `Ctrl+Q` | 退出 |
 | `F1` | 快捷键帮助 |
-| `/tools` | 列出当前所有工具 |
+| `/tools` | 列出当前所有工具（含已接入的 MCP 工具） |
 | `/skills` | 列出已发现的 Skill |
+| `/mcp` | 查看 MCP server 连接状态与工具数 |
+| `/rules` | 查看已注入的 AGENT.md 内容 |
+| `/sessions` | 列出历史会话 |
+| `/load <id\|last>` | 恢复某个会话 |
+| `/save` | 手动保存当前会话（每轮也会自动保存） |
+| `/new` | 开始新会话 |
+| `/trace` | 本次运行的请求数 / 工具调用数 / 错误数 |
 | `/clear` | 同 `Ctrl+L` |
 
 对话区里每条工具调用都会留痕：
@@ -495,7 +590,7 @@ def _char_width(ch): return 2 if unicodedata.east_asian_width(ch) in ("W", "F") 
 
 ## 九、安全设计
 
-这 16 个工具里有 3 个是**破坏性**的（`writeFile` / `deleteDirectory` / `deleteFile`），
+这 18 个工具里有 3 个是**破坏性**的（`writeFile` / `deleteDirectory` / `deleteFile`），
 还有 1 个能执行任意程序（`RunCli`）。教学环境下的处理：
 
 1. **路径沙箱**：文件类工具的所有路径 `realpath` 之后必须落在项目根目录内：
@@ -510,10 +605,13 @@ def _char_width(ch): return 2 if unicodedata.east_asian_width(ch) in ("W", "F") 
 
 4. **Skill 读取边界**：`loadSkill` 只能读该 Skill 目录内的文件，向上跳目录直接拒绝。
 
-5. **命令不经过 shell**：`RunCli` 用参数列表 + `shell=False`，
+5. **技能写入边界**：`createSkill` 的 name 只允许 `[a-z0-9._-]`，附件路径必须是技能目录内的相对路径，
+   目录已存在一律拒绝（不覆盖）。
+
+6. **命令不经过 shell**：`RunCli` 用参数列表 + `shell=False`，
    `;` `&&` `|` 只是普通字符。`.cmd` / `.bat` 必须由 `cmd.exe` 解释，这是唯一例外，仍是列表传参。
 
-6. **失败不抛异常**：所有工具异常都被 `dispatch` 兜成「错误：…」字符串返回给模型，
+7. **失败不抛异常**：所有工具异常都被 `dispatch` 兜成「错误：…」字符串返回给模型，
    模型才有机会换方案，而不是整个程序崩掉。
 
 > **关于 `RunCli` 的边界**：按课程要求，本阶段**不做**命令白名单/黑名单/审批 ——
@@ -523,7 +621,214 @@ def _char_width(ch): return 2 if unicodedata.east_asian_width(ch) in ("W", "F") 
 
 ---
 
-## 十、常见问题
+## 十、第八周：从「一堆工具」到「一个平台」
+
+前七周做的是「工具越多越好」，第八周补的是**工具之外的四层机制** ——
+让 Agent 能记住规矩、能接别人的工具、能攒经验、能事后复盘。
+
+### 1. `createSkill`：让 Agent 自己攒经验
+
+已有的 `loadSkill` 只能**读**技能。缺了写入侧，技能生态就只能靠人手写目录，
+「这次的做法以后还会用到」这个真实需求没法闭环。
+
+`createSkill` 把一套流程落盘成标准结构：
+
+```
+.agents/skills/<name>/
+├── SKILL.md          ← YAML frontmatter（name / description）+ 正文
+└── checklist.md      ← 可选附件，由 loadSkill(filename=...) 按需读取
+```
+
+三道校验，缺一不可：
+
+| 校验 | 规则 | 拦的是什么 |
+| --- | --- | --- |
+| 命名 | `^[a-z0-9][a-z0-9._-]{1,47}$`，排除 Windows 保留名 | `../../etc` 这类路径穿越 |
+| 重复 | 目录已存在 → 拒绝写入 | 静默覆盖用户已有技能 |
+| 附件 | 必须是技能目录内的相对路径，先校验后落盘 | 借附件写到项目外 |
+
+**技术难点在「热刷新」**：System Prompt 里的技能清单是启动时算的，
+新建的技能如果只写磁盘，模型这一轮仍然不知道它存在。
+
+解法是把 System Prompt 从「一次性快照」改成「可重建」：
+
+```python
+# core/agent.py
+def _compose_system(self) -> str:
+    """基础人设 + 外部注入（规则 / 技能）+ 历史压缩摘要"""
+
+def refresh_system(self) -> bool:
+    new_system = self._compose_system()
+    if self.messages[0].get("content") == new_system:
+        return False
+    self.messages[0]["content"] = new_system
+    return True
+```
+
+`ask()` 每轮开头调一次 `refresh_system()`，技能清单变了就更新第一条 system 消息。
+创建技能后 `skills.discover()` 重建注册表 —— 同一个会话里立刻生效，不用重启。
+
+> 真实证据：本项目 `.agents/skills/demo-rule-check/` 就是让模型自己建的。
+> 对它说「帮我创建一个技能……」，它调用 `createSkill` 生成了 SKILL.md 和 checklist.md，
+> 内容与 `AGENT.md` 的规则一致。
+
+### 2. `AGENT.md`：项目级长期规则
+
+有些话希望 Agent 每次都记住 ——「回答用中文」「改完代码跑测试」「不要动 config.ini」。
+这些和具体任务无关，属于**项目的规矩**，应该跟着代码走，而不是每轮重复一遍。
+
+启动时读一次，注入 System Prompt：
+
+```
+## 项目规则（AGENT.md）
+<project_rules source="AGENT.md">
+- 工具函数失败时返回以「错误：」开头的字符串，不抛异常。
+- 修改 core/ 下的代码后，至少运行 py -m unittest discover -s tests -v
+...
+</project_rules>
+```
+
+三条工程约束：
+
+1. **只注入一次**：启动时读，之后随 System Prompt 常驻。`reset()` 清空对话时保留（它是规则，不是对话内容）。
+2. **长度截断**：超过 `rules_max_chars`（默认 8000）就截断，并明确告诉模型「后面还有内容没给你」，
+   否则它会以为自己看全了。
+3. **缺失不报错**：没有这个文件是完全正常的，静默跳过。
+
+兼容 `AGENT.md` / `AGENTS.md` / `agent.md` 等命名，也可以指定子路径：
+
+```ini
+[agent]
+rules_enabled = true
+rules_file = AGENT.md      ; 留空则按默认候选列表找
+rules_max_chars = 8000
+```
+
+和 Skill 的区别：**AGENT.md 常驻、Skill 懒加载**。
+规矩必须每轮都在，技能正文只在用到时读 —— 两者省 token 的策略正好相反。
+
+> 实测：问「根据 AGENT.md 里的约定，改完 core 下的代码要跑哪两条命令？」
+> 模型准确答出 `py -m unittest discover -s tests -v` 和 `py smoke_tui.py`，
+> 全程没有调工具 —— 说明规则确实在 System Prompt 里，而不是靠它猜。
+
+### 3. MCP 客户端：接别人写的工具
+
+MCP（Model Context Protocol）把「工具实现」和「工具调用方」解耦：
+别人写好的 server，本 Agent 连上去就能用，不用把代码搬进来。
+
+配置放在项目根目录的 `mcp.json`（模板 `mcp.example.json`）：
+
+```json
+{
+  "mcpServers": {
+    "echo-demo": {
+      "transport": "stdio",
+      "command": "py",
+      "args": ["tests/fixtures/echo_server.py"]
+    },
+    "remote": {
+      "transport": "http",
+      "url": "http://127.0.0.1:8091/mcp",
+      "headers": { "Authorization": "Bearer ${REMOTE_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+两种传输：
+
+| 传输 | 适用场景 | 实现 |
+| --- | --- | --- |
+| `stdio` | 本机有个 server.py，不想开端口 | 子进程 + JSON-RPC over stdin/stdout |
+| `http` | server 已启动或在别的机器 | Streamable HTTP（老版本 SDK 回退 SSE） |
+
+工具并入可调用集合时做两件事：
+
+1. **schema 转换**：MCP 的 `inputSchema` → OpenAI 的 `parameters`，补 `type: object` / `properties` / `required`
+2. **来源标记**：名字加前缀 `mcp__<server>__<tool>`，描述加 `[MCP · server]`。
+   模型能分清哪些是本机能力、哪些来自外部，出问题也知道该查哪个 server。
+
+**最大的技术难点是线程模型**：MCP SDK 全异步（anyio），而 Agent 主循环是同步的，
+TUI 里还要跑在工作线程。桥接办法是**一个常驻线程 + 一个常驻事件循环**：
+
+```
+主线程                      mcp 线程
+  │                           │
+  ├─ start() ────────────────▶ new_event_loop()
+  │                           ├─ 每个 server 一个常驻 task
+  │                           │    async with stdio_client(...) as streams:
+  │                           │        async with ClientSession(...) as s:
+  │                           │            await s.initialize()
+  │                           │            await s.list_tools() → 注册
+  │                           │            await stop_event.wait()   ← 挂在这
+  ├─ call() ─────────────────▶ run_coroutine_threadsafe(s.call_tool(...))
+  │◀──────────── result ──────┤
+```
+
+为什么要「挂住」而不是「连完就退」：session 是有状态的，
+`async with` 退出连接就断了。用 `stop_event.wait()` 把协程挂起，
+连接一直活着，直到程序退出时统一关闭。
+
+失败必须降级 —— 这是能不能用的分水岭：
+
+```
+· echo         [已连接]  3 个工具 · stdio
+· broken       [失败]    启动命令不存在：[WinError 2] 系统找不到指定的文件
+· remote-dead  [失败]    连接被拒绝（服务未启动或端口不对）
+```
+
+单点失败不影响其它 server，也不阻塞启动（各自 `connect_timeout`，默认 20 秒）。
+模型可以用 `mcpStatus` 查状态，`/mcp` 命令在界面里看。
+
+还有两个容易忽略的细节：
+
+- **子进程 stderr 必须导走**。server 抛异常时整段 traceback 会直接糊到 TUI 上。
+  现在重定向到 `.lumen/mcp/<server>.log`，界面干净，排障还能翻。
+- **字段命名兼容**。MCP SDK 1.x 是 camelCase（`isError` / `structuredContent`），
+  2.x 改成了 snake_case（`is_error` / `structured_content`）。解析时两种都试，升库不会静默失效。
+
+### 4. 会话、压缩、追踪
+
+**会话持久化**：`Agent.messages` 原样存成 JSON，每轮结束自动保存。
+
+```json
+{ "id": "20261112-143327", "title": "根据 AGENT.md 里的约定…", "turns": 1,
+  "messages": [ {"role": "system", "...": "..."}, {"role": "user", "...": "..."} ] }
+```
+
+为什么存整个 `messages` 而不是自己定义的对话记录：Function Calling 的历史是有结构的，
+`assistant.tool_calls` 与后续 `role=tool` 的 `tool_call_id` **必须成对**，
+自己重新拼装很容易错位，API 会直接拒绝。
+
+命令：`/sessions` 列出、`/load <id|last>` 恢复、`/save` 手动存、`/new` 开新会话。
+
+**上下文压缩**：消息总字符超过 `max_context_chars`（默认 10 万）时，把早期对话折叠成一段摘要。
+
+这里有个坑必须处理：**切点不能落在工具调用中间**。如果留下一条孤立的 `role=tool` 消息，
+下一次请求会因为「找不到对应的 tool_call_id」被 API 拒绝。所以切点要往前退到非 tool 消息：
+
+```python
+cut = len(self.messages) - keep
+while cut > 1 and self.messages[cut].get("role") == "tool":
+    cut -= 1        # 退到一个 assistant / user 边界
+```
+
+摘要不调 LLM（省钱、离线可用），只统计「问过什么、用过哪些工具、错了几次」，
+并合并进 System Prompt —— 而不是伪造一条 user/assistant 消息污染对话语义。
+
+**调用追踪**：每次 LLM 请求、工具调用写成一行 JSON：
+
+```json
+{"kind":"llm_response","round":1,"seconds":8.07,"text_chars":90,"tool_calls":0}
+{"kind":"tool_call","name":"searchWeb","seconds":2.31,"result_chars":4821,"ok":true}
+```
+
+只记长度、耗时、名字，**不记对话正文和工具返回值** —— 那里面可能有隐私或密钥。
+`/trace` 看本次统计，文件在 `.lumen/traces/`。
+
+---
+
+## 十一、常见问题
 
 **Q：报「api_key 还没填写」**
 `config.ini` 里 `[llm] api_key` 还是占位符。填上真实的 key。
@@ -600,7 +905,7 @@ py --version            # 有版本号 = 真的解释器
 在命令行里手动跑，别双击。依次确认：
 
 1. `pip install -r requirements.txt` 是否成功 —— 缺 `textual` 会退化成 CLI，缺 `openai` 会直接报错；
-2. `py smoke_tui.py` 能否 14 项全过 —— 不能的话把第一条 FAIL 的原文发出来；
+2. `py smoke_tui.py` 能否 16 项全过 —— 不能的话把第一条 FAIL 的原文发出来；
 3. `pwd`（PowerShell 里是 `Get-Location`）是否就是 `lumen` 目录 —— 路径不对会导致找不到 `core` 包。
 
 **Q：装了依赖但还是说 `No module named 'textual'`**
@@ -622,3 +927,38 @@ py -m pip install -r requirements.txt         # 就用它装依赖
 ```bash
 python -m pip install -r requirements.txt -i https://pypi.org/simple
 ```
+
+**Q：`/rules` 说没找到 AGENT.md，但我明明建了**
+它只在**启动时的工作目录**（也就是项目根目录）下找。先 `cd` 到 `lumen` 再启动。
+确认文件名是 `AGENT.md` 或 `AGENTS.md`；也可以用 `[agent] rules_file` 指定别的路径。
+
+**Q：改了 AGENT.md，当前会话没生效**
+按设计只注入一次，改动要**重启**才生效。这是刻意的 ——
+长期规则如果每轮重读，会话中途的规则变化会让模型行为前后不一致。
+
+**Q：`/mcp` 显示「未配置 server」**
+项目根目录没有 `mcp.json`。复制 `mcp.example.json` 改名为 `mcp.json` 再启动。
+
+**Q：MCP server 连不上**
+先看 `/mcp` 里那句具体原因，常见三类：
+
+| 提示 | 原因 | 处理 |
+| --- | --- | --- |
+| 启动命令不存在 | `command` 写错，或程序不在 PATH | 换绝对路径，或确认那个命令能单独跑起来 |
+| 连接被拒绝 | HTTP server 没启动 / 端口不对 | 先把 server 起来，或用 stdio 方式 |
+| 连接超时 | 启动慢或网络不通 | 调大该 server 的 `connect_timeout` |
+
+单个 server 失败**不会**影响其它 server，也不影响启动 —— 直接用本机工具就行。
+想看 server 自己的报错：`.lumen/mcp/<server>.log`。
+
+**Q：装 mcp 库报 `No module named 'mcp.server.fastmcp'`**
+mcp 2.x 把 `FastMCP` 改名成 `MCPServer`（`from mcp.server.mcpserver import MCPServer`）。
+本项目的客户端代码两种都兼容；只有你自己写 server 时要注意包名。
+
+**Q：会话列表是空的**
+每轮对话正常结束才会自动保存。如果这一轮请求直接报错，就不会落盘。
+也可以 `/save` 手动存一次。
+
+**Q：上下文压缩后模型「忘」了前面的事**
+压缩只保留要点（问过什么、用过哪些工具），细节会丢。需要细节就重新问，
+或者让模型重新读文件。不想压缩就把 `[agent] max_context_chars` 调大。

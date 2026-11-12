@@ -1,5 +1,7 @@
 # ---- 密钥 / 本地配置 ----
 config.ini
+# MCP 配置里可能有 token，本地环境各人不同；模板 mcp.example.json 入库
+mcp.json
 
 # ---- Python ----
 __pycache__/
@@ -19,3 +21,5 @@ Thumbs.db
 # ---- 运行产物 ----
 *.log
 .raw/
+# 会话存档与调用追踪（本地数据，不入库）
+.lumen/

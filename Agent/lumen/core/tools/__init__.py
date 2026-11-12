@@ -29,3 +29,9 @@ from . import run_cli  # noqa: E402,F401
 
 # 第七周：Skill 动态加载
 from . import load_skill  # noqa: E402,F401
+
+# 第八周：把做法沉淀成技能（技能机制的写入侧）
+from . import create_skill  # noqa: E402,F401
+
+# 第八周：MCP 客户端状态查询（工具本身可能在启动后由 mcp_client 动态注册）
+from . import mcp_status  # noqa: E402,F401

@@ -155,6 +155,11 @@ class LumenApp(App):
         extra_system: str = "",
         skills: list[tuple[str, str]] | None = None,
         warning: str = "",
+        system_provider=None,
+        rules=None,
+        mcp=None,
+        store=None,
+        session_id: str = "",
     ) -> None:
         super().__init__()
         self.project_root = project_root
@@ -164,6 +169,13 @@ class LumenApp(App):
         self.skill_names = [name for name, _ in self.skills]
         # 配置类问题（缺 api_key 等）：界面照常打开，只在状态区提示
         self.warning = warning
+
+        # 以下由 main.py 注入，缺省时界面仍可独立启动（测试会这么用）
+        self.system_provider = system_provider
+        self.rules = rules
+        self.mcp = mcp
+        self.store = store
+        self.session_id = session_id
 
         self.agent: Agent | None = None
         self._init_error = ""
@@ -220,16 +232,41 @@ class LumenApp(App):
                 yield Static(f"  {_fit(name, 40)}", classes="side-item")
                 yield Static(f"    {_fit(description, 38)}", classes="side-dim")
 
+        if self.rules is not None:
+            yield Static("项目规则", classes="side-title")
+            yield Static(f"  {_fit(self.rules.filename, 38)}", classes="side-item")
+            yield Static(
+                f"    {self.rules.total_chars} 字符"
+                + ("（已截断注入）" if self.rules.truncated else ""),
+                classes="side-dim",
+            )
+
+        if self.mcp is not None and getattr(self.mcp, "states", None):
+            yield Static("MCP", classes="side-title")
+            for name, status, detail in self.mcp.status_rows():
+                mark = {"ready": "●", "failed": "○"}.get(status, "…")
+                css = "side-item" if status == "ready" else "side-dim"
+                yield Static(f"  {mark} {_fit(name, 18)}", classes=css)
+                yield Static(f"    {_fit(detail, 36)}", classes="side-dim")
+
         yield Static("状态", classes="side-title")
         yield Static("就绪", classes="side-item", id="status")
         yield Static("轮次 0  ·  tokens 0", classes="side-dim", id="stats")
+        if self.session_id:
+            yield Static(f"  会话 {self.session_id}", classes="side-dim", id="session")
         if self.warning:
             yield Static("注意", classes="side-title")
             yield Static(f"  {self.warning}", classes="side-warn", markup=False)
 
     def on_mount(self) -> None:
         try:
-            self.agent = Agent(extra_system=self.extra_system)
+            self.agent = Agent(
+                extra_system=self.extra_system,
+                system_provider=self.system_provider,
+                session_store=self.store,
+                session_id=self.session_id,
+            )
+            self.session_id = self.agent.session_id
         except Exception as exc:  # noqa: BLE001 - 依赖缺失/配置错误不该让界面起不来
             self._init_error = f"{type(exc).__name__}: {exc}"
             self._set_status("初始化失败")
@@ -270,6 +307,31 @@ class LumenApp(App):
                 lines += [f"  {name}  —  {desc}" for name, desc in self.skills]
                 lines.append("（正文由模型按需调 loadSkill 读取）")
                 await self._system_note("\n".join(lines))
+            return
+        if lowered == "/mcp":
+            await self._show_mcp()
+            return
+        if lowered == "/rules":
+            await self._show_rules()
+            return
+        if lowered == "/save":
+            await self._save_session()
+            return
+        if lowered == "/sessions":
+            await self._list_sessions()
+            return
+        if lowered.startswith("/load"):
+            await self._load_session(text[5:].strip())
+            return
+        if lowered == "/new":
+            self.action_clear()
+            if self.agent:
+                self.agent.session_id = ""
+            self.session_id = ""
+            await self._system_note("已开始新会话，下一轮会存成新文件。")
+            return
+        if lowered == "/trace":
+            await self._show_trace()
             return
         if self._busy:
             await self._system_note("上一条还在处理中，请稍候。")
@@ -393,11 +455,123 @@ class LumenApp(App):
             self.query_one("#stats", Static).update(f"轮次 {self._turns}  ·  tokens {tokens}")
         except Exception:  # noqa: BLE001
             pass
+        try:
+            sid = (self.agent.session_id if self.agent else "") or self.session_id
+            if sid:
+                self.query_one("#session", Static).update(f"  会话 {_fit(sid, 36)}")
+        except Exception:  # noqa: BLE001 - 会话标签可能还没挂载
+            pass
 
     async def _system_note(self, text: str) -> None:
         log = self.query_one("#log", VerticalScroll)
         await log.mount(Static(text, classes="tool-result", markup=False))
         log.scroll_end(animate=False)
+
+    # ------------------------------------------------------------------ 新命令
+    async def _show_mcp(self) -> None:
+        if self.mcp is None:
+            await self._system_note(
+                f"本次运行没有启动 MCP。\n"
+                f"在 {self.project_root} 下创建 mcp.json 后重启即可（格式见 mcp.example.json）。"
+            )
+            return
+
+        lines = [f"MCP：{self.mcp.summary()}"]
+        for warning in getattr(self.mcp, "warnings", None) or []:
+            lines.append(f"  · 告警：{warning}")
+        for name, status, detail in self.mcp.status_rows():
+            label = {"ready": "已连接", "failed": "失败", "pending": "连接中"}.get(status, status)
+            lines.append(f"  {name}  [{label}]  {detail}")
+        if not self.mcp.states:
+            lines.append("  （没有配置任何 server）")
+        await self._system_note("\n".join(lines))
+
+    async def _show_rules(self) -> None:
+        if self.rules is None:
+            await self._system_note(
+                f"未找到 AGENT.md。\n在 {self.project_root} 下新建 AGENT.md，"
+                f"内容会作为长期规则注入 System Prompt（下次启动生效）。"
+            )
+            return
+        await self._system_note(
+            f"项目规则 {self.rules.summary()}\n{'─' * 40}\n{self.rules.text}"
+        )
+
+    async def _save_session(self) -> None:
+        if self.store is None or self.agent is None:
+            await self._system_note("会话存储不可用。")
+            return
+        info = self.store.save(self.agent.messages, self.agent.session_id, model=self.agent.model)
+        if info is None:
+            await self._system_note("保存失败（目录不可写？）")
+            return
+        self.agent.session_id = info.id
+        self.session_id = info.id
+        await self._system_note(f"已保存会话 {info.id}（{info.turns} 轮）。")
+
+    async def _list_sessions(self) -> None:
+        if self.store is None:
+            await self._system_note("会话存储不可用。")
+            return
+        items = self.store.list()
+        if not items:
+            await self._system_note("还没有保存过的会话。每轮对话结束会自动保存。")
+            return
+        lines = [f"共 {len(items)} 个会话（最新在前）："]
+        for info in items:
+            current = self.agent is not None and info.id == self.agent.session_id
+            lines.append(f"  {info.display()}{'  ← 当前' if current else ''}")
+        lines.append("恢复：/load <id> 或 /load last")
+        await self._system_note("\n".join(lines))
+
+    async def _load_session(self, target: str) -> None:
+        if self.store is None or self.agent is None:
+            await self._system_note("会话存储不可用。")
+            return
+        if not target:
+            await self._system_note("用法：/load <会话 id>，或 /load last")
+            return
+        if target == "last":
+            latest = self.store.latest()
+            if latest is None:
+                await self._system_note("没有可恢复的会话。")
+                return
+            target = latest.id
+
+        data = self.store.load(target)
+        if data is None:
+            await self._system_note(f"找不到会话 {target}。用 /sessions 看看有哪些。")
+            return
+
+        self.agent.messages = data["messages"]
+        self.agent.session_id = data["id"]
+        self.agent.turns = int(data.get("turns") or 0)
+        self.agent.refresh_system()
+        self.session_id = data["id"]
+        self._turns = self.agent.turns
+        self._refresh_stats()
+
+        log = self.query_one("#log", VerticalScroll)
+        await log.mount(
+            Static(
+                f"已恢复会话 {data['id']}（{self.agent.turns} 轮）：{data.get('title', '')}",
+                classes="tool-result",
+                markup=False,
+            )
+        )
+        log.scroll_end(animate=False)
+
+    async def _show_trace(self) -> None:
+        from core import tracing
+
+        tracer = tracing.get()
+        if tracer is None:
+            await self._system_note("追踪未启用（config.ini 的 [trace] enabled）。")
+            return
+        text = tracer.summary()
+        if tracer.path:
+            text += f"\n日志：{tracer.path}"
+        await self._system_note(text)
 
     # ------------------------------------------------------------------ actions
     def action_clear(self) -> None:
@@ -413,7 +587,9 @@ class LumenApp(App):
     def action_help(self) -> None:
         self.notify(
             "Enter 发送 · Ctrl+L 清空上下文 · Ctrl+Q 退出\n"
-            "/tools 列出工具 · /skills 列出技能 · /clear 清空 · /help 帮助",
+            "/tools 工具 · /skills 技能 · /mcp MCP 状态 · /rules 项目规则\n"
+            "/sessions 会话列表 · /load <id|last> 恢复 · /save 保存 · /new 新会话\n"
+            "/trace 调用统计 · /clear 清空 · /help 帮助",
             title="快捷键",
-            timeout=6,
+            timeout=8,
         )
