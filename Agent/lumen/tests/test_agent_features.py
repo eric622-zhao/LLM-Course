@@ -23,6 +23,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -103,6 +104,30 @@ class AgentMdTest(_TempRootCase):
         doc = agent_md.load(self.root)
         self.assertIsNotNone(doc)
         self.assertEqual(doc.filename, "docs/rules.md")
+
+    def test_filename_not_broken_by_short_name_expansion(self):
+        """Windows 的 8.3 短名不该污染 filename。
+
+        GitHub Actions 的 temp 目录是 `C:\\Users\\RUNNER~1\\...`，
+        `realpath()` 会把它展开成 `C:\\Users\\runneradmin\\...`。
+        旧实现拿 realpath 的绝对路径去和原始短名路径算 relpath，
+        得到 `../../../../../runneradmin/AppData/Local/Temp/.../AGENT.md`，
+        注入 System Prompt 的 source 属性就变成这串垃圾。
+        本地用户目录一般没有短名，这个坑只在 CI 上暴露 —— 由 Actions 抓出来。
+        """
+        short_root = r"C:\Users\RUNNER~1\AppData\Local\Temp\lumen-test"
+
+        with mock.patch.object(agent_md.os.path, "isfile", return_value=True), \
+             mock.patch.object(
+                 agent_md.os.path, "realpath",
+                 side_effect=lambda p: p.replace("RUNNER~1", "runneradmin"),
+             ), \
+             mock.patch.object(agent_md, "_read_text", return_value="# 规则\n"):
+            doc = agent_md.load(short_root)
+
+        self.assertIsNotNone(doc)
+        self.assertEqual(doc.filename, "AGENT.md")
+        self.assertNotIn("..", doc.filename)
 
     def test_truncation(self):
         self.write("AGENT.md", "x" * 5000)

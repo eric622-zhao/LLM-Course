@@ -2,7 +2,7 @@ name: tests
 
 # 只跑「不需要外部服务」的检查：
 #   - 两个 MCP server 的离线单测（httpx.MockTransport，不连后端）
-#   - lumen 的 48 项单测（不需要 API Key）
+#   - lumen 的 49 项单测（不需要 API Key）
 #   - lumen 的 TUI 冒烟（headless，仅作参考）
 # 需要 pethospital.exe / AnythingLLM / 真实 API Key 的集成测试不在此列，
 # 那些见各子项目 README 的「验证清单」。

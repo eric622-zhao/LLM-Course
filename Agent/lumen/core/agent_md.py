@@ -87,13 +87,28 @@ def _candidate_names() -> list[str]:
     return list(DEFAULT_FILENAMES)
 
 
-def find(project_root: str) -> str | None:
-    """在项目根目录下找规则文件，返回绝对路径；没有则 None。"""
+def _locate(project_root: str) -> tuple[str, str] | None:
+    """找到规则文件，返回 (绝对路径, 相对项目根的展示名)。
+
+    展示名直接取**候选名**，不用 `relpath(realpath(path), project_root)` 反推。
+    Windows 上这条路会翻车：GitHub Actions 的 temp 目录是 8.3 短名
+    （`C:\\Users\\RUNNER~1\\...`），`realpath()` 会把它展开成长名
+    （`C:\\Users\\runneradmin\\...`），两者前缀不同，relpath 就算出
+    `../../../../../runneradmin/AppData/Local/Temp/...` 这种东西。
+    本地用户目录一般没有短名差异，所以这个坑只在 CI 上暴露。
+    """
     for name in _candidate_names():
         candidate = os.path.join(project_root, name)
         if os.path.isfile(candidate):
-            return os.path.realpath(candidate)
+            display = os.path.basename(name) if os.path.isabs(name) else name
+            return os.path.realpath(candidate), display.replace(os.sep, "/")
     return None
+
+
+def find(project_root: str) -> str | None:
+    """在项目根目录下找规则文件，返回绝对路径；没有则 None。"""
+    located = _locate(project_root)
+    return located[0] if located else None
 
 
 def load(project_root: str) -> RulesDoc | None:
@@ -101,9 +116,10 @@ def load(project_root: str) -> RulesDoc | None:
     if not _enabled():
         return None
 
-    path = find(project_root)
-    if path is None:
+    located = _locate(project_root)
+    if located is None:
         return None
+    path, display = located
 
     try:
         text = _read_text(path).strip()
@@ -126,7 +142,7 @@ def load(project_root: str) -> RulesDoc | None:
 
     return RulesDoc(
         path=path,
-        filename=os.path.relpath(path, project_root).replace(os.sep, "/"),
+        filename=display,
         text=text,
         total_chars=total,
         truncated=truncated,

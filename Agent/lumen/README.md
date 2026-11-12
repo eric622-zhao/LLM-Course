@@ -252,7 +252,7 @@ lumen/
 ├── tui/                     表现层 —— 只负责显示与输入
 │   ├── app.py              Textual App：布局、事件、线程回调
 │   └── app.tcss            样式表
-├── tests/                   离线单测（48 项，不需要 API Key）
+├── tests/                   离线单测（49 项，不需要 API Key）
 │   ├── test_agent_features.py   规则 / 会话 / 压缩 / 技能创建
 │   ├── test_search_web.py       搜索解析与降级
 │   ├── test_report.py           /tools 与 /skills 的清单渲染
@@ -1032,7 +1032,7 @@ except ImportError:  # mcp 1.x
 | --- | --- | --- | --- |
 | 1 | 环境自检 | `py -c "import sys; print(sys.executable)"` | 输出真实解释器路径，不是 `WindowsApps` 下的占位程序 |
 | 2 | 依赖齐全 | `py -c "import textual, openai, mcp"` | 无报错 |
-| 3 | 离线单测 | `py -m unittest discover -s tests -v` | `Ran 48 tests ... OK` |
+| 3 | 离线单测 | `py -m unittest discover -s tests -v` | `Ran 49 tests ... OK` |
 | 4 | 界面与命令 | `py smoke_tui.py` | `通过 17/17` |
 | 5 | 真实对话 | `py main.py` → 问「现在几点」 | 模型调用 `getLocalTime` 并回填结果 |
 | 6 | AGENT.md 生效 | 在项目根写 `AGENT.md` 写上「回答以『收到』开头」→ 重启 → 随便问 | 回答以「收到」开头；`/rules` 能看到规则内容 |
