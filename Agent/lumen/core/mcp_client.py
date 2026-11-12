@@ -355,6 +355,7 @@ class MCPManager:
         self._thread: threading.Thread | None = None
         self._started = threading.Event()
         self._stopped = False
+        self._tasks: list[asyncio.Task] = []
         # qualified name -> (server, 原始 tool 名)
         self._call_map: dict[str, tuple[str, str]] = {}
 
@@ -414,12 +415,28 @@ class MCPManager:
             state = self.states[name]
             state.stop_event = asyncio.Event()
             tasks.append(asyncio.create_task(self._serve(state), name=f"mcp-{name}"))
+        self._tasks = tasks
 
         # 各自等待就绪（带超时），互不阻塞
         await asyncio.gather(
             *(self._await_ready(state) for state in self.states.values()),
             return_exceptions=True,
         )
+
+    async def _shutdown(self) -> None:
+        """等各个 server 把 async with 走完。
+
+        不能直接 loop.stop() —— 那样协程的 finally 还没跑，
+        transport / httpx 客户端没来得及关闭，GC 时会吐 RuntimeWarning。
+        """
+        if not self._tasks:
+            return
+        done, pending = await asyncio.wait(self._tasks, timeout=3)
+        for task in pending:  # 还没退出的强制取消
+            task.cancel()
+        if pending:
+            await asyncio.wait(pending, timeout=2)
+        self._tasks = []
 
     async def _await_ready(self, state: ServerState) -> None:
         deadline = time.monotonic() + state.config.connect_timeout
@@ -635,16 +652,26 @@ class MCPManager:
     def stop(self) -> None:
         """关闭所有连接并结束后台线程。"""
         self._stopped = True
-        if self._loop is None or self._loop.is_closed():
+        loop = self._loop
+        if loop is None or loop.is_closed():
             return
+
+        # 1) 置位各 server 的 stop_event，协程会从 wait() 返回、退出 async with
         for state in self.states.values():
             if state.stop_event is not None:
                 try:
-                    self._loop.call_soon_threadsafe(state.stop_event.set)
+                    loop.call_soon_threadsafe(state.stop_event.set)
                 except RuntimeError:
                     pass
+
+        # 2) 等清理跑完再停循环，否则 transport 没关干净
         try:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            asyncio.run_coroutine_threadsafe(self._shutdown(), loop).result(timeout=8)
+        except Exception:  # noqa: BLE001 - 收尾失败不该阻塞退出
+            pass
+
+        try:
+            loop.call_soon_threadsafe(loop.stop)
         except RuntimeError:
             pass
         if self._thread is not None:

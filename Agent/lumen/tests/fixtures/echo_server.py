@@ -44,5 +44,16 @@ def fail_always() -> str:
 
 
 if __name__ == "__main__":
-    server.run(transport="stdio")
+    # 默认走 stdio（被客户端当子进程拉起）；
+    # 传 --http <端口> 则以 Streamable HTTP 方式对外提供服务，
+    # 用来验证客户端的网络传输分支。
+    if "--http" in sys.argv:
+        index = sys.argv.index("--http")
+        try:
+            port = int(sys.argv[index + 1])
+        except (IndexError, ValueError):
+            port = 8765
+        server.run(transport="streamable-http", host="127.0.0.1", port=port)
+    else:
+        server.run(transport="stdio")
     sys.exit(0)
