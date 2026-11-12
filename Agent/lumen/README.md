@@ -249,7 +249,7 @@ lumen/
 │   ├── test_agent_features.py   规则 / 会话 / 压缩 / 技能创建
 │   ├── test_search_web.py       搜索解析与降级
 │   └── fixtures/echo_server.py  最小 MCP server，用于端到端验证
-├── smoke_tui.py             界面冒烟测试（16 项）
+├── smoke_tui.py             界面冒烟测试（17 项）
 ├── .agents/skills/          示例 Skill（随项目启动自动发现）
 │   ├── weekly-report/       写周报（含 reference/style-guide.md 附件）
 │   ├── repo-checkup/        git 仓库体检
@@ -422,7 +422,7 @@ pip install -r requirements.txt
 | | `skill_max_chars` | `20000` | `loadSkill` 单次读取上限 |
 | `[agent]` | `max_tool_rounds` | `12` | 单轮提问最多几轮工具调用，防死循环 |
 | | `rules_enabled` | `true` | 是否读 `AGENT.md` |
-| | `rules_file` | `AGENT.md` | 规则文件名，可写子路径 |
+| | `rules_file` | （空） | 留空则依次尝试 `AGENT.md` / `AGENTS.md` 等；也可写子路径 |
 | | `rules_max_chars` | `8000` | 规则注入上限 |
 | | `max_context_chars` | `100000` | 消息总字符超此值触发压缩 |
 | | `keep_recent_messages` | `8` | 压缩时至少保留最近几条 |
@@ -938,7 +938,7 @@ py --version            # 有版本号 = 真的解释器
 在命令行里手动跑，别双击。依次确认：
 
 1. `pip install -r requirements.txt` 是否成功 —— 缺 `textual` 会退化成 CLI，缺 `openai` 会直接报错；
-2. `py smoke_tui.py` 能否 16 项全过 —— 不能的话把第一条 FAIL 的原文发出来；
+2. `py smoke_tui.py` 能否 17 项全过 —— 不能的话把第一条 FAIL 的原文发出来；
 3. `pwd`（PowerShell 里是 `Get-Location`）是否就是 `lumen` 目录 —— 路径不对会导致找不到 `core` 包。
 
 **Q：装了依赖但还是说 `No module named 'textual'`**
@@ -1022,7 +1022,7 @@ except ImportError:  # mcp 1.x
 | 1 | 环境自检 | `py -c "import sys; print(sys.executable)"` | 输出真实解释器路径，不是 `WindowsApps` 下的占位程序 |
 | 2 | 依赖齐全 | `py -c "import textual, openai, mcp"` | 无报错 |
 | 3 | 离线单测 | `py -m unittest discover -s tests -v` | `Ran 37 tests ... OK` |
-| 4 | 界面与命令 | `py smoke_tui.py` | `通过 16/16` |
+| 4 | 界面与命令 | `py smoke_tui.py` | `通过 17/17` |
 | 5 | 真实对话 | `py main.py` → 问「现在几点」 | 模型调用 `getLocalTime` 并回填结果 |
 | 6 | AGENT.md 生效 | 在项目根写 `AGENT.md` 写上「回答以『收到』开头」→ 重启 → 随便问 | 回答以「收到」开头；`/rules` 能看到规则内容 |
 | 7 | Skill 渐进加载 | 启动后看侧栏 `Skill` 区块 | 只显示名称与描述；模型要用时才 `loadSkill` 读正文 |

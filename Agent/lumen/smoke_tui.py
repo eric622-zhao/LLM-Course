@@ -30,12 +30,37 @@ def check(name, ok, detail=""):
 
 def setup():
     config.load()
+    # 冒烟只验证「界面能不能挂载、命令有没有回显」，不验证模型连通性。
+    # 即使 config.ini 里填了真实 key，这里也强制置空：
+    # 否则第 5 步「提问」会真的发一次网络请求 —— 既慢，又会因网络抖动偶发失败，
+    # 让一个本该纯粹的 UI 自检变成不稳定的集成测试。
+    parser = config._require_loaded()
+    if not parser.has_section("llm"):
+        parser.add_section("llm")
+    parser.set("llm", "api_key", "")
+
     from core.tools import file_ops
     file_ops.set_project_root(os.getcwd())
     from core import agent_md, skills
     reg = skills.discover(os.getcwd())
     rules = agent_md.load(os.getcwd())
     return reg.prompt_block(), reg.describe(), reg.warnings, rules
+
+
+async def wait_for_log(pilot, app, predicate, timeout=8.0, step=0.1):
+    """轮询等日志出现期望内容。
+
+    比固定 `pause(); pause()` 稳：命令处理快的机器上立刻返回，
+    慢的机器（或 CI 上 CPU 被抢占时）也不会因为等待不够而误判失败。
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        await pilot.pause()
+        text = "\n".join(str(w.render()) for w in app.query("#log > *"))
+        if predicate(text):
+            return True, text
+        await asyncio.sleep(step)
+    return False, "\n".join(str(w.render()) for w in app.query("#log > *"))
 
 
 async def main():
@@ -69,31 +94,31 @@ async def main():
         app.query_one("#prompt").focus()
         await pilot.press(*list("/tools"))
         await pilot.press("enter")
-        await pilot.pause()
-        await pilot.pause()
-        log_text = "\n".join(str(w.render()) for w in app.query("#log > *"))
-        check("/tools 命令有回显", "getLocalTime" in log_text or "可用工具" in log_text,
-              log_text[-60:].replace("\n", " "))
+        ok, log_text = await wait_for_log(
+            pilot, app, lambda t: "getLocalTime" in t or "可用工具" in t,
+        )
+        check("/tools 命令有回显", ok, log_text[-60:].replace("\n", " "))
 
         # 4b. 新增命令：/mcp 与 /rules 都不能崩，且要有可读回显
         for cmd, expect in (("/mcp", "MCP"), ("/rules", "规则")):
             app.query_one("#prompt").focus()
             await pilot.press(*list(cmd))
             await pilot.press("enter")
-            await pilot.pause()
-            await pilot.pause()
-            text = "\n".join(str(w.render()) for w in app.query("#log > *"))
-            check(f"{cmd} 命令有回显", expect in text, text[-50:].replace("\n", " "))
+            ok, text = await wait_for_log(pilot, app, lambda t, e=expect: e in t)
+            check(f"{cmd} 命令有回显", ok, text[-50:].replace("\n", " "))
 
         # 5. 提问：配置不全时应被拦下来，而不是抛 UnicodeEncodeError
         app.query_one("#prompt").focus()
         await pilot.press(*list("你好"))
         await pilot.press("enter")
-        for _ in range(40):
+        # 先等事件循环把 busy 置位，再等它落回。
+        # 否则刚按完回车就判断，busy 还是 False，会得到一个恒真的假通过。
+        await asyncio.sleep(0.2)
+        for _ in range(80):
             await pilot.pause()
-            await asyncio.sleep(0.25)
             if not app._busy:
                 break
+            await asyncio.sleep(0.1)
         check("提问后回到就绪", not app._busy)
 
         log_text = "\n".join(str(w.render()) for w in app.query("#log > *"))
