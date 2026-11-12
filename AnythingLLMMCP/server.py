@@ -32,18 +32,25 @@ from typing import Any
 
 import httpx
 
-try:  # mcp >= 1.2
-    from mcp.server.fastmcp import FastMCP
-except Exception as exc:  # pragma: no cover
-    print("未找到 mcp 依赖，请先执行： pip install -r requirements.txt", file=sys.stderr)
-    raise SystemExit(1) from exc
+try:  # mcp >= 2.0：FastMCP 改名为 MCPServer
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:  # 兼容 mcp 1.x
+    from mcp.server.fastmcp import FastMCP as MCPServer  # type: ignore[assignment]
+
+    class ToolError(Exception):  # type: ignore[no-redef]
+        """1.x 没有专门的工具错误类型。"""
+
+
+# 工具里抛 ToolError，框架才会把可读信息透传给模型；
+# 抛普通异常只会在客户端看到一句 "Error executing tool xxx"。
 
 
 DEFAULT_API = os.environ.get("ANYTHINGLLM_API", "http://127.0.0.1:3001").rstrip("/")
 API_KEY = os.environ.get("ANYTHINGLLM_API_KEY", "").strip()
 TIMEOUT = float(os.environ.get("ANYTHINGLLM_TIMEOUT", "15"))
 
-mcp = FastMCP(
+mcp = MCPServer(
     name="anythingllm",
     instructions=(
         "读取本地 AnythingLLM 的工作区与文档信息。"
@@ -71,16 +78,16 @@ def call(path: str, params: dict[str, Any] | None = None) -> Any:
     try:
         resp = client().get(path, params=params)
     except httpx.ConnectError as exc:
-        raise RuntimeError(
+        raise ToolError(
             f"连接 AnythingLLM 失败（{_base}）。请先打开 AnythingLLM 桌面端再重试。"
         ) from exc
     except httpx.TimeoutException as exc:
-        raise RuntimeError(f"请求超时：GET {path}") from exc
+        raise ToolError(f"请求超时：GET {path}") from exc
 
     if resp.status_code == 401:
-        raise RuntimeError("AnythingLLM 返回 401：该接口需要鉴权，请设置 ANYTHINGLLM_API_KEY。")
+        raise ToolError("AnythingLLM 返回 401：该接口需要鉴权，请设置 ANYTHINGLLM_API_KEY。")
     if resp.status_code >= 400:
-        raise RuntimeError(f"AnythingLLM 返回 {resp.status_code}：{resp.text[:300]}")
+        raise ToolError(f"AnythingLLM 返回 {resp.status_code}：{resp.text[:300]}")
 
     try:
         return resp.json()
@@ -142,7 +149,7 @@ def first_workspace() -> Any:
     """直接返回列表中的第一个工作区（课堂任务里常说的「AnythingLLM 的第一个工作区」）。"""
     items = _workspaces(call("/api/workspaces"))
     if not items:
-        raise RuntimeError("没有读到任何工作区，请确认 AnythingLLM 已打开且已创建工作区。")
+        raise ToolError("没有读到任何工作区，请确认 AnythingLLM 已打开且已创建工作区。")
     return items[0]
 
 
@@ -157,11 +164,9 @@ def main() -> None:
         mcp.run(transport="stdio")
         return
 
-    mcp.settings.host = args.host
-    mcp.settings.port = args.port
     print(f"[anythingllm-mcp] Streamable HTTP -> http://{args.host}:{args.port}/mcp", flush=True)
     print(f"[anythingllm-mcp] 后端 AnythingLLM -> {_base}", flush=True)
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

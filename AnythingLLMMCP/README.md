@@ -24,6 +24,10 @@ curl -s http://127.0.0.1:3001/api/workspaces
 pip install -r requirements.txt
 ```
 
+> 依赖装的是 **MCP SDK 2.x**。2.x 把 `FastMCP` 改名成了 `MCPServer`，
+> `server.py` 对 1.x / 2.x 都做了兼容导入；整套仓库（含 `Agent/lumen`
+> 的 MCP 客户端）统一按 2.x 验证。
+
 ## 三、运行
 
 ```bash

@@ -17,30 +17,43 @@ Cherry Studio / OpenCode 等）可以直接查询、录入宠物档案与病历�
 
 环境变量
 --------
-    PET_HOSPITAL_API   后端地址，默认 http://127.0.0.1:8080
-    PET_HOSPITAL_TIMEOUT  请求超时秒数，默认 15
+    PET_HOSPITAL_API        后端地址，默认 http://127.0.0.1:8080
+    PET_HOSPITAL_TIMEOUT    单次请求超时秒数，默认 15
+    PET_HOSPITAL_RETRIES    连接/超时/5xx 的重试次数，默认 2
+    PET_HOSPITAL_LOG        日志文件路径；不填则输出到 stderr
+    PET_HOSPITAL_LOG_LEVEL  日志级别，默认 INFO
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
+import time
 from typing import Any
 
 import httpx
 
-try:  # mcp >= 1.2
-    from mcp.server.fastmcp import FastMCP
-except Exception as exc:  # pragma: no cover
-    print("未找到 mcp 依赖，请先执行： pip install -r requirements.txt", file=sys.stderr)
-    raise SystemExit(1) from exc
+try:  # mcp >= 2.0：FastMCP 改名为 MCPServer
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:  # 兼容 mcp 1.x
+    from mcp.server.fastmcp import FastMCP as MCPServer  # type: ignore[assignment]
+
+    class ToolError(Exception):  # type: ignore[no-redef]
+        """1.x 没有专门的工具错误类型。"""
+
+
+# 注意：工具里必须抛 ToolError 而不是普通异常。
+# 普通异常会被框架压成一句 "Error executing tool xxx"，模型拿不到
+# 「要先启动 pethospital.exe」这类可操作信息；ToolError 则会原样透传。
 
 
 BASE_URL = os.environ.get("PET_HOSPITAL_API", "http://127.0.0.1:8080").rstrip("/")
 TIMEOUT = float(os.environ.get("PET_HOSPITAL_TIMEOUT", "15"))
 
-mcp = FastMCP(
+mcp = MCPServer(
     name="pet-hospital",
     instructions=(
         "提供本地宠物医院管理系统（Pet Hospital REST API）的查询与录入能力。"
@@ -50,6 +63,47 @@ mcp = FastMCP(
 
 _client: httpx.Client | None = None
 
+RETRIES = max(0, int(os.environ.get("PET_HOSPITAL_RETRIES", "2")))
+BACKOFF_BASE = 0.3          # 退避基数：0.3s、0.6s、1.2s …
+BACKOFF_CAP = 3.0
+
+# --------------------------------------------------------------------------- #
+# 调用日志
+# --------------------------------------------------------------------------- #
+# 注意：stdio 传输下 stdout 是 MCP 协议通道，任何日志都不能写进去，
+# 否则会污染 JSON-RPC 流导致客户端解析失败。所以一律走 stderr 或文件。
+logger = logging.getLogger("pet-hospital-mcp")
+
+
+def setup_logging() -> None:
+    """配置调用日志。文件路径可用 PET_HOSPITAL_LOG 指定，默认 stderr。"""
+    if logger.handlers:                      # 避免重复添加 handler
+        return
+    level = os.environ.get("PET_HOSPITAL_LOG_LEVEL", "INFO").upper()
+    logger.setLevel(getattr(logging, level, logging.INFO))
+
+    path = os.environ.get("PET_HOSPITAL_LOG", "").strip()
+    if path:
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            handler: logging.Handler = logging.FileHandler(path, encoding="utf-8")
+        except OSError as exc:               # 文件不可写就退回 stderr，不因日志而崩溃
+            logger.warning("日志文件 %s 打不开（%s），改用 stderr", path, exc)
+            handler = logging.StreamHandler(sys.stderr)
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)-5s %(message)s", "%H:%M:%S")
+    )
+    logger.addHandler(handler)
+    logger.propagate = False                 # 不向上冒泡，免得被 mcp 的 logging 再打一遍
+
+    # httpx / httpcore 默认也往 root logger 抛 INFO，会把每次请求打两遍。
+    # 我们自己的 logger 已经记了方法、路径、状态码和耗时，这里压到 WARNING。
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 def client() -> httpx.Client:
     global _client
@@ -58,28 +112,87 @@ def client() -> httpx.Client:
     return _client
 
 
+def _backoff(attempt: int) -> float:
+    """指数退避，带上限。attempt 从 0 开始。"""
+    return min(BACKOFF_BASE * (2 ** attempt), BACKOFF_CAP)
+
+
 def call(method: str, path: str, **kwargs: Any) -> Any:
-    """调用后端接口并拆掉统一响应信封，只把 data 交给模型。"""
-    try:
-        resp = client().request(method, path, **kwargs)
-    except httpx.ConnectError as exc:
-        raise RuntimeError(
-            f"连接宠物医院服务失败（{BASE_URL}）。请先运行 pethospital.exe 再重试。"
-        ) from exc
-    except httpx.TimeoutException as exc:
-        raise RuntimeError(f"请求超时：{method} {path}") from exc
+    """调用后端接口并拆掉统一响应信封，只把 data 交给模型。
 
-    try:
-        body = resp.json()
-    except ValueError:
-        resp.raise_for_status()
-        return resp.text
+    可恢复的失败（连接不上、超时、5xx）会做指数退避重试；
+    4xx 与业务错误码不重试 —— 重试也不会变好，只会拖长等待。
+    """
+    started = time.monotonic()
+    last_error: Exception | None = None
 
-    if isinstance(body, dict) and "code" in body:
-        if body.get("code") not in (200, 201):
-            raise RuntimeError(f"后端返回错误 {body.get('code')}：{body.get('message')}")
-        return body.get("data", body)
-    return body
+    for attempt in range(RETRIES + 1):
+        try:
+            resp = client().request(method, path, **kwargs)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+                httpx.WriteTimeout, httpx.PoolTimeout) as exc:
+            last_error = exc
+            if attempt < RETRIES:
+                delay = _backoff(attempt)
+                logger.warning("%s %s 失败（%s），%.1fs 后第 %d/%d 次重试",
+                               method, path, type(exc).__name__, delay, attempt + 1, RETRIES)
+                time.sleep(delay)
+                continue
+            logger.error("%s %s 重试 %d 次后仍失败（%s）",
+                         method, path, RETRIES, type(exc).__name__)
+            if isinstance(exc, httpx.ConnectError):
+                raise ToolError(
+                    f"连接宠物医院服务失败（{BASE_URL}），已重试 {RETRIES} 次。"
+                    f"请先运行 pethospital.exe 再重试。"
+                ) from exc
+            raise ToolError(
+                f"请求超时：{method} {path}（已重试 {RETRIES} 次，单次超时 {TIMEOUT:.0f}s）"
+            ) from exc
+        except httpx.HTTPError as exc:       # 其余 httpx 异常不重试
+            logger.error("%s %s 异常：%s", method, path, exc)
+            raise ToolError(f"请求失败：{method} {path} — {exc}") from exc
+
+        # 5xx 视为后端临时故障，值得重试；4xx 是调用方的问题，直接抛
+        if resp.status_code >= 500 and attempt < RETRIES:
+            delay = _backoff(attempt)
+            logger.warning("%s %s 返回 %d，%.1fs 后第 %d/%d 次重试",
+                           method, path, resp.status_code, delay, attempt + 1, RETRIES)
+            time.sleep(delay)
+            continue
+
+        elapsed = (time.monotonic() - started) * 1000
+        logger.info("%s %s -> %d (%.0fms, attempt=%d)",
+                    method, path, resp.status_code, elapsed, attempt + 1)
+
+        # 4xx/5xx 一律转成结构化中文错误。
+        # 不能交给 raise_for_status()：那会把上游的 HTML 错误页原样带出来，
+        # 模型看不懂，也污染上下文。这里只留状态码 + 截断后的响应片段。
+        if resp.status_code >= 400:
+            snippet = " ".join((resp.text or "").split())[:200]
+            logger.warning("%s %s 返回 HTTP %d：%s",
+                           method, path, resp.status_code, snippet)
+            raise ToolError(
+                f"后端返回 HTTP {resp.status_code}"
+                f"{'（已重试 ' + str(RETRIES) + ' 次）' if resp.status_code >= 500 else ''}"
+                f"：{snippet or resp.reason_phrase}"
+            )
+
+        try:
+            body = resp.json()
+        except ValueError:
+            logger.warning("%s %s 返回非 JSON 内容", method, path)
+            return resp.text
+
+        if isinstance(body, dict) and "code" in body:
+            if body.get("code") not in (200, 201):
+                logger.warning("%s %s 业务错误 code=%s msg=%s",
+                               method, path, body.get("code"), body.get("message"))
+                raise ToolError(f"后端返回错误 {body.get('code')}：{body.get('message')}")
+            return body.get("data", body)
+        return body
+
+    # 理论上不会走到这里：循环内要么 return 要么 raise
+    raise ToolError(f"请求失败：{method} {path} — {last_error}")
 
 
 # --------------------------------------------------------------------------- #
@@ -366,11 +479,14 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8090, help="HTTP 监听端口")
     args = parser.parse_args()
 
+    setup_logging()
+    logger.info("启动 pet-hospital-mcp · 后端 %s · 超时 %.0fs · 重试 %d 次",
+                BASE_URL, TIMEOUT, RETRIES)
+
     if args.http:
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
+        logger.info("传输方式 Streamable HTTP -> http://%s:%d/mcp", args.host, args.port)
         print(f"[pet-hospital-mcp] Streamable HTTP -> http://{args.host}:{args.port}/mcp", flush=True)
-        mcp.run(transport="streamable-http")
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
     else:
         mcp.run(transport="stdio")
 

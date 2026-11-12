@@ -19,7 +19,9 @@
 ├── .gitignore
 ├── README.md
 ├── PetHospitalMCP/
-│   ├── server.py            MCP 服务器（15 个工具）
+│   ├── server.py            MCP 服务器（15 个工具 · 重试 · 结构化错误 · 调用日志）
+│   ├── test_server.py       离线单测 10 项（不需要后端）
+│   ├── check_stdio.py       协议层联调自检（自己起客户端连上来）
 │   ├── requirements.txt
 │   └── README.md
 ├── AnythingLLMMCP/
@@ -91,6 +93,10 @@ cd PetHospitalMCP
 pip install -r requirements.txt
 python server.py                 # stdio，供客户端拉起
 python server.py --http          # 或 Streamable HTTP -> http://127.0.0.1:8090/mcp
+
+# 2) 不接 AI 客户端也能自测
+python -m unittest test_server   # 离线单测，不需要后端
+python check_stdio.py            # 真实走一遍握手 + 调工具
 ```
 
 ### 任务 2 · AnythingLLMMCP
@@ -157,6 +163,17 @@ AnythingLLM    (3001)  ◄──  AnythingLLMServer(8092)  ← 浏览器上传�
 ```
 
 端口特意错开，三个服务可以同时运行互不冲突。
+
+### MCP SDK 版本
+
+三个 MCP 相关目录（PetHospitalMCP / AnythingLLMMCP / Agent/lumen）统一按
+**MCP SDK 2.x** 验证。2.x 把 `FastMCP` 改名成了 `MCPServer`，
+两个 server 都写了兼容导入（`mcp.server.mcpserver` 优先，回退 `mcp.server.fastmcp`），
+所以装 1.x 也能跑；但客户端（`Agent/lumen/core/mcp_client.py`）依赖 2.x 的
+`streamable_http_client`，**建议整体装 2.x**。
+
+> 工具内部抛的是 `ToolError` 而非普通异常 —— 普通异常会被框架压成一句
+> `Error executing tool xxx`，模型拿不到可操作的提示信息。
 
 ## 安全提醒
 
