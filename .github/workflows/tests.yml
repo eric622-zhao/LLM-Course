@@ -1,0 +1,90 @@
+name: tests
+
+# 只跑「不需要外部服务」的检查：
+#   - 两个 MCP server 的离线单测（httpx.MockTransport，不连后端）
+#   - lumen 的 48 项单测（不需要 API Key）
+#   - lumen 的 TUI 冒烟（headless，仅作参考）
+# 需要 pethospital.exe / AnythingLLM / 真实 API Key 的集成测试不在此列，
+# 那些见各子项目 README 的「验证清单」。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: 单测 (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            PetHospitalMCP/requirements.txt
+            AnythingLLMMCP/requirements.txt
+            Agent/lumen/requirements.txt
+
+      - name: 安装 PetHospitalMCP 依赖
+        run: pip install -r PetHospitalMCP/requirements.txt
+
+      - name: PetHospitalMCP 单测（重试 / 错误语义 / stdout 干净 / 工具契约）
+        working-directory: PetHospitalMCP
+        run: python -m unittest test_server -v
+
+      - name: 安装 AnythingLLMMCP 依赖
+        run: pip install -r AnythingLLMMCP/requirements.txt
+
+      - name: AnythingLLMMCP 单测（三类能力 / 上传 / 检索问答 / 分页 / 鉴权）
+        working-directory: AnythingLLMMCP
+        run: python -m unittest test_server -v
+
+      - name: 安装 lumen 依赖
+        run: pip install -r Agent/lumen/requirements.txt
+
+      - name: 生成 config.ini（CI 里没有本地配置）
+        working-directory: Agent/lumen
+        shell: bash
+        run: cp config.example.ini config.ini
+
+      - name: lumen 单测（规则 / 会话 / 压缩 / 技能 / 搜索 / 清单渲染）
+        working-directory: Agent/lumen
+        run: python -m unittest discover -s tests -v
+
+      - name: 文档–代码一致性自检（工具清单 / 目录树 / 路由 / 测试数量）
+        run: python check_docs.py -v
+
+  smoke:
+    name: TUI 冒烟 (ubuntu)
+    runs-on: ubuntu-latest
+    # TUI 渲染依赖终端能力，CI 环境与真实终端有差异。
+    # 这里只作为「装得上、挂得起来」的参考信号，失败不阻断主流程。
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: pip install -r Agent/lumen/requirements.txt
+
+      - name: 生成 config.ini
+        working-directory: Agent/lumen
+        run: cp config.example.ini config.ini
+
+      - name: 冒烟（17 项控件与命令回显断言）
+        working-directory: Agent/lumen
+        run: python smoke_tui.py
