@@ -401,6 +401,39 @@ pip install -r requirements.txt
 （[千帆控制台](https://console.bce.baidu.com/qianfan/) 创建，并开通「百度搜索」服务）。
 不填只影响 `searchWeb`，其它功能照常用。
 
+#### 配置项总览
+
+`config.ini` 里全部配置项及其默认值。**标「必填」的只有 `api_key` 一项**，其余留空也能跑。
+
+| 分区 | 配置项 | 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `[llm]` | `base_url` | `https://api.openai.com/v1` | OpenAI 兼容接口地址 |
+| | `model` | `gpt-4o-mini` | 模型名，**必须支持 Function Calling** |
+| | `api_key` | — | **必填**。不含占位符，否则启动即报配置错误 |
+| | `temperature` | `0.7` | 采样温度 |
+| `[search]` | `baidu_qianfan_api_key` | — | 千帆 AI 搜索 Key；不填则 `searchWeb` 返回「未配置」 |
+| `[tools]` | `read_max_chars` | `60000` | `readFile` 单次最多返回字符数 |
+| | `fetchweb_timeout` | `20` | `fetchWeb` 超时（秒） |
+| | `fetchweb_max_chars` | `12000` | `fetchWeb` 正文上限，超出截断 |
+| | `search_top_k` | `5` | `searchWeb` 返回条数（1~20） |
+| | `search_timeout` | `25` | `searchWeb` 超时（秒） |
+| | `cli_timeout` | `60` | `RunCli` 默认超时（单次可覆盖，上限 300） |
+| | `cli_max_output` | `8000` | `RunCli` 的 stdout / stderr 各自上限 |
+| | `skill_max_chars` | `20000` | `loadSkill` 单次读取上限 |
+| `[agent]` | `max_tool_rounds` | `12` | 单轮提问最多几轮工具调用，防死循环 |
+| | `rules_enabled` | `true` | 是否读 `AGENT.md` |
+| | `rules_file` | `AGENT.md` | 规则文件名，可写子路径 |
+| | `rules_max_chars` | `8000` | 规则注入上限 |
+| | `max_context_chars` | `100000` | 消息总字符超此值触发压缩 |
+| | `keep_recent_messages` | `8` | 压缩时至少保留最近几条 |
+| `[mcp]` | `enabled` | `true` | 启动时是否连 MCP server |
+| | `config` | `mcp.json` | MCP 配置文件路径；不存在则静默跳过 |
+| `[trace]` | `enabled` | `true` | 是否写调用追踪 |
+| | `dir` | `.lumen/traces` | 追踪文件目录 |
+
+> 环境相关的坑：`textual` 没装会自动降级 CLI；`python` 可能命中微软商店占位程序，
+> 请用 `py`；必须在项目根目录启动（沙箱边界就是当前工作目录）。
+
 ### 3. 启动
 
 Windows 下双击 `run.bat` 即可。它会自动 `cd` 到本目录、挑一个真正能用的 Python
@@ -952,8 +985,23 @@ python -m pip install -r requirements.txt -i https://pypi.org/simple
 想看 server 自己的报错：`.lumen/mcp/<server>.log`。
 
 **Q：装 mcp 库报 `No module named 'mcp.server.fastmcp'`**
-mcp 2.x 把 `FastMCP` 改名成 `MCPServer`（`from mcp.server.mcpserver import MCPServer`）。
-本项目的客户端代码两种都兼容；只有你自己写 server 时要注意包名。
+mcp 2.x 把 `FastMCP` 改名成 `MCPServer`（`from mcp.server.mcpserver import MCPServer`），
+`fastmcp.py` 变成了一个会主动报错、让你去迁移的墓碑模块。
+本项目的客户端两种字段命名都兼容；自己写 server 时按下面的兼容写法即可
+（`PetHospitalMCP/server.py` 和 `AnythingLLMMCP/server.py` 都是这么写的）：
+
+```python
+try:  # mcp >= 2.0
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as MCPServer
+
+    class ToolError(Exception): ...
+```
+
+顺带一提：工具里要 `raise ToolError(...)` 而不是普通异常 ——
+普通异常会被框架压成一句 `Error executing tool xxx`，模型看不到具体原因。
 
 **Q：会话列表是空的**
 每轮对话正常结束才会自动保存。如果这一轮请求直接报错，就不会落盘。
@@ -962,3 +1010,42 @@ mcp 2.x 把 `FastMCP` 改名成 `MCPServer`（`from mcp.server.mcpserver import 
 **Q：上下文压缩后模型「忘」了前面的事**
 压缩只保留要点（问过什么、用过哪些工具），细节会丢。需要细节就重新问，
 或者让模型重新读文件。不想压缩就把 `[agent] max_context_chars` 调大。
+
+---
+
+## 十二、验证清单
+
+照着走一遍就能确认「文档说的」和「代码做的」对得上。**除第 5 步外都不需要 API Key。**
+
+| # | 验证什么 | 命令 / 操作 | 期望结果 |
+| --- | --- | --- | --- |
+| 1 | 环境自检 | `py -c "import sys; print(sys.executable)"` | 输出真实解释器路径，不是 `WindowsApps` 下的占位程序 |
+| 2 | 依赖齐全 | `py -c "import textual, openai, mcp"` | 无报错 |
+| 3 | 离线单测 | `py -m unittest discover -s tests -v` | `Ran 37 tests ... OK` |
+| 4 | 界面与命令 | `py smoke_tui.py` | `通过 16/16` |
+| 5 | 真实对话 | `py main.py` → 问「现在几点」 | 模型调用 `getLocalTime` 并回填结果 |
+| 6 | AGENT.md 生效 | 在项目根写 `AGENT.md` 写上「回答以『收到』开头」→ 重启 → 随便问 | 回答以「收到」开头；`/rules` 能看到规则内容 |
+| 7 | Skill 渐进加载 | 启动后看侧栏 `Skill` 区块 | 只显示名称与描述；模型要用时才 `loadSkill` 读正文 |
+| 8 | 技能落盘 | 说「把这个做法记成技能，叫 demo-x」 | `.agents/skills/demo-x/SKILL.md` 出现，侧栏立刻多一项 |
+| 9 | 文件沙箱 | 说「读一下 C:/Windows/win.ini」 | 返回「拒绝访问项目目录之外的路径」 |
+| 10 | 联网搜索 | 说「搜一下今天的 AI 新闻」 | 调 `searchWeb` 返回带链接的条目（需填千帆 Key） |
+| 11 | MCP 接入 | `copy mcp.example.json mcp.json` → 启用 `echo-demo` → 重启 → 问「用 echo 说你好」 | 工具数 18 → 21；调 `mcp__echo-demo__echo` 并回填 |
+| 12 | 会话持久化 | `/save` → `/sessions` → `/new` → `/load` | `.lumen/sessions/` 下有文件，重新载入后上下文还在 |
+| 13 | 上下文压缩 | 连续多轮长对话，看 `/stats` | 消息数不再无限增长，早期内容被折叠成摘要 |
+| 14 | 调用追踪 | `/trace` | 显示本轮 LLM 耗时、工具耗时、成败；`.lumen/traces/*.jsonl` 有记录 |
+
+> 第 3、4 步是纯离线断言，适合改完代码先跑一遍；第 9、11 步最能体现「不是只有声明」。
+
+### 工具清单与触发方式
+
+18 个工具按语义分 4 组，模型按 `description` 自行选择，不需要用户记名字：
+
+| 组 | 工具 | 怎么触发 |
+| --- | --- | --- |
+| 时间 | `getLocalTime` `isLeapYear` | 「现在几点」「2024 是闰年吗」 |
+| 文件（10） | `getCurrentDirectory` `listDirectory` `getFileType` `readFile` `writeFile` `createFile` `createDirectory` `renamePath` `deleteDirectory` `deleteFile` | 「看看这个目录」「把 a.txt 改名成 b.txt」 |
+| 网络与执行 | `fetchWeb` `searchWeb` `RunCli` | 「读一下这个网页」「搜一下 X」「跑个 git status」 |
+| 技能与 MCP | `loadSkill` `createSkill` `mcpStatus` | 「用 weekly-report 那个技能」「把这做法记成技能」「MCP 连上了吗」 |
+
+其中 `writeFile` / `deleteDirectory` / `deleteFile` 是**不可恢复**的，
+`RunCli` 能执行任意本地命令 —— 四者的行为边界见第九节「安全设计」。
