@@ -238,6 +238,34 @@ def check_test_count(folder: Path, label: str, pattern: str, expect_word: str) -
         fail(label, f"{folder.name}: README 写 {claimed.group(1)} 项，实际跑出 {actual} 项")
 
 
+def check_images() -> None:
+    """图片引用：README 里的 ![](相对路径) 必须真的存在。
+
+    文档里放截图是加分项，但截图改名或挪位置后链接失效，
+    对读者来说就是一处坏掉的页面 —— 和声明了不存在的功能一样糟。
+    """
+    refs = 0
+    broken: list[str] = []
+
+    for md in ROOT.rglob("README.md"):
+        if any(part in {".git", "node_modules"} for part in md.parts):
+            continue
+        text = md.read_text(encoding="utf-8")
+        for _, src in re.findall(r"!\[([^\]]*)\]\(([^)]+)\)", text):
+            if src.startswith(("http://", "https://", "data:")):
+                continue
+            refs += 1
+            if not (md.parent / src).resolve().exists():
+                broken.append(f"{md.relative_to(ROOT)} -> {src}")
+
+    if broken:
+        fail("图片引用", "以下图片链接指向不存在的文件：" + "；".join(broken))
+    elif refs:
+        ok("图片引用", f"{refs} 处相对图片链接全部有效")
+    else:
+        warn("图片引用", "README 中没有任何图片引用")
+
+
 def check_placeholders() -> None:
     """占位残留：未处理的 TODO / FIXME，以及像真密钥的硬编码。
 
@@ -309,6 +337,7 @@ def main() -> int:
     check_test_count(ROOT / "AnythingLLMMCP", "测试数量", "test_server", r"(\d+) 项")
 
     check_placeholders()
+    check_images()
 
     # 输出
     fails = [r for r in RESULTS if r[0] == "FAIL"]

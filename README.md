@@ -10,6 +10,15 @@
 | 4 | [`Agent/Practice01/`](Agent/Practice01/) | 第四周开发任务 | 调用大模型：单次请求 → 流式 → 多轮流式对话 | — |
 | 5 | [`Agent/lumen/`](Agent/lumen/) | 第五～八周开发任务 | **流明 Lumen**：18 个 Function Calling 工具 + MCP 客户端（动态接入外部工具）+ AGENT.md 规则注入 + 技能创建/加载 + 会话持久化 + core/tui 分层 + Textual TUI | — |
 
+## 界面预览
+
+| 流明 Lumen（TUI Agent） | AnythingLLM 上传与问答页 |
+| --- | --- |
+| ![Lumen](docs/screenshots/tui.png) | ![Web](docs/screenshots/web-chat.png) |
+
+截图均为真实运行结果：TUI 那张由 Textual 的 `save_screenshot()` 导出，
+网页那张由无头浏览器实际操作（选文件 → 上传 → 提问 → 等流式结束）后截取。
+
 ---
 
 ## 目录结构

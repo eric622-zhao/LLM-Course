@@ -86,19 +86,6 @@
   .target strong { font-weight: 600; }
   .target .spacer { flex: 1; }
 
-  textarea {
-    width: 100%;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 6px 8px;
-    font: inherit;
-    font-size: 12.5px;
-    color: var(--ink);
-    background: #fff;
-    resize: vertical;
-    display: none;
-  }
-
   .drop {
     border: 1.8px dashed #c6d2ea;
     border-radius: 13px;
@@ -256,7 +243,7 @@
   .switch input { accent-color: var(--brand); cursor: pointer; }
 
   .thread {
-    max-height: 340px;
+    max-height: 480px;      /* 太矮的话一段完整回答看不全，得来回滚 */
     overflow-y: auto;
     padding: 4px 2px 2px;
     display: flex;
@@ -276,6 +263,7 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
+    min-width: 0;          /* flex item 默认 min-width:auto，中文长句会顶出去 */
     animation: fade .18s ease;
   }
   @keyframes fade { from { opacity: 0; transform: translateY(4px); } }
@@ -284,11 +272,13 @@
 
   .bubble {
     max-width: 86%;
+    min-width: 0;
     padding: 10px 13px;
     border-radius: 13px;
     font-size: 13.5px;
     line-height: 1.68;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     word-break: break-word;
   }
   .turn.me .bubble {
@@ -332,6 +322,8 @@
     border-radius: 9px;
     background: #fbfcff;
     line-height: 1.55;
+    white-space: pre-wrap;      /* 让标题后真的换行，而不是挤成一行 */
+    overflow-wrap: anywhere;
   }
   .src b { color: #3d4a68; font-weight: 600; }
   .src .score { color: #8b95ab; margin-left: 6px; }
@@ -342,8 +334,14 @@
     align-items: flex-end;
     margin-top: 14px;
   }
+  .ask .btn {
+    width: auto;        /* .btn 全局是 width:100%，在 flex 行里会把输入框挤没 */
+    flex: none;
+    padding: 13px 22px;
+  }
   .ask textarea {
     flex: 1;
+    min-width: 0;
     resize: none;
     padding: 11px 13px;
     border: 1px solid var(--line);
@@ -361,7 +359,6 @@
     box-shadow: 0 0 0 3px rgba(61, 107, 255, .12);
     background: #fff;
   }
-  .ask .btn { flex: none; }
 
   .hint {
     margin-top: 8px;
@@ -592,6 +589,25 @@ uploadB.addEventListener('click', () => {
 // 对话：后端统一发 SSE（有 Key 转发上游流式，无 Key 包装成一次性），
 // 前端只解析 delta / sources / session / error / done 五种事件。
 // ------------------------------------------------------------------ //
+
+// 只认 **粗体** 一种 Markdown —— 模型爱用星号包关键词，原样显示很难看。
+// 全程用 textContent / createTextNode 赋值，绝不拼 innerHTML：
+// 模型输出属于不可信内容，拼 HTML 就是 XSS 入口。
+function renderRich(el, text) {
+  el.textContent = '';
+  text.split(/(\*\*[^*\n]+\*\*)/).forEach(part => {
+    if (!part) return;
+    const m = /^\*\*([^*\n]+)\*\*$/.exec(part);
+    if (m) {
+      const strong = document.createElement('strong');
+      strong.textContent = m[1];
+      el.appendChild(strong);
+    } else {
+      el.appendChild(document.createTextNode(part));
+    }
+  });
+}
+
 function addTurn(who, text) {
   const wrap = document.createElement('div');
   wrap.className = 'turn ' + who;
@@ -692,7 +708,7 @@ async function ask() {
         if (ev.type === 'delta') {
           acc += ev.text || '';
           caret.remove();
-          bub.textContent = acc;
+          renderRich(bub, acc);
           bub.appendChild(caret);
           thread.scrollTop = thread.scrollHeight;
         } else if (ev.type === 'session') {
@@ -714,7 +730,7 @@ async function ask() {
     } else if (!acc) {
       bub.textContent = '（没有返回内容，可能是该工作区里还没有已向量化的文档）';
     } else {
-      bub.textContent = acc;
+      renderRich(bub, acc);
     }
     sendB.disabled = false;
     sendB.textContent = '发送';
