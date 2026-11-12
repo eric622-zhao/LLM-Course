@@ -38,6 +38,27 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
+
+def _setup_stdout() -> None:
+    """保证中文能打出去。
+
+    控制台编码各不相同：本地中文 Windows 是 GBK（能编中文，不动），
+    GitHub Actions 的 Windows runner 是 cp1252（编不了中文，直接崩在
+    `print(f"\\n[{group}]")` 上）。所以先试探一下，编不了才切 UTF-8。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        try:
+            "中文".encode(encoding)
+        except (UnicodeEncodeError, LookupError):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 - 老版本不支持就算了
+                pass
+
+
+_setup_stdout()
+
 RESULTS: list[tuple[str, str, str]] = []   # (级别, 分组, 说明)
 
 
