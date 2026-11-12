@@ -5,6 +5,15 @@
 把本地运行的 **宠物医院 REST API**（`pethospital.exe`，默认 `http://127.0.0.1:8080`）
 包装成一组 MCP 工具，让支持 MCP 的 AI 客户端直接查询档案、录入病历、追加收费。
 
+```
+PetHospitalMCP/
+├── server.py           MCP 服务器（15 个工具 · 重试 · 结构化错误 · 调用日志）
+├── test_server.py      离线单测 10 项（MockTransport，不需要后端）
+├── check_stdio.py      协议层联调自检（自己起客户端连上来）
+├── requirements.txt
+└── README.md
+```
+
 ---
 
 ## 一、先启动后端
@@ -113,7 +122,7 @@ python server.py --http --port 8095
 python -m unittest test_server -v
 ```
 
-用 `httpx.MockTransport` 拦下真实网络，验证调用层的约定：
+用 `httpx.MockTransport` 拦下真实网络，共 10 项，验证调用层的约定：
 
 | 用例 | 验证的行为 |
 | --- | --- |

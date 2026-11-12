@@ -5,8 +5,8 @@
 | # | 目录 | 任务 | 交付物 | 端口 |
 | --- | --- | --- | --- | --- |
 | 1 | [`PetHospitalMCP/`](PetHospitalMCP/) | 第一次开发任务 | 把宠物医院 REST API 包装成 MCP 服务器 | 8090（HTTP 模式） |
-| 2 | [`AnythingLLMMCP/`](AnythingLLMMCP/) | 第二次开发任务 | AnythingLLM 工作区 MCP 服务器（Streamable HTTP） | 8091 |
-| 3 | [`AnythingLLMServer/`](AnythingLLMServer/) | 第三次开发任务 | 文件上传网页 + 转发服务，写入 AnythingLLM 第一个工作区 | 8092 |
+| 2 | [`AnythingLLMMCP/`](AnythingLLMMCP/) | 第二次开发任务 | AnythingLLM MCP 服务器（Streamable HTTP）：工作区管理 + 文档上传向量化 + 检索问答 | 8091 |
+| 3 | [`AnythingLLMServer/`](AnythingLLMServer/) | 第三次开发任务 | 上传与问答网页 + 转发服务：上传即向量化，可就资料流式提问 | 8092 |
 | 4 | [`Agent/Practice01/`](Agent/Practice01/) | 第四周开发任务 | 调用大模型：单次请求 → 流式 → 多轮流式对话 | — |
 | 5 | [`Agent/lumen/`](Agent/lumen/) | 第五～八周开发任务 | **流明 Lumen**：18 个 Function Calling 工具 + MCP 客户端（动态接入外部工具）+ AGENT.md 规则注入 + 技能创建/加载 + 会话持久化 + core/tui 分层 + Textual TUI | — |
 
@@ -25,12 +25,13 @@
 │   ├── requirements.txt
 │   └── README.md
 ├── AnythingLLMMCP/
-│   ├── server.py            Streamable HTTP，端口 8091
+│   ├── server.py            Streamable HTTP，端口 8091（9 个工具）
+│   ├── test_server.py       离线单测 23 项（MockTransport，不需要 AnythingLLM）
 │   ├── requirements.txt
 │   └── README.md
 ├── AnythingLLMServer/
-│   ├── index.html           上传网页
-│   ├── server.py            静态托管 + 上传转发
+│   ├── index.html           上传 + 流式问答网页
+│   ├── server.py            静态托管 + 上传转发 + 对话 SSE 适配
 │   ├── requirements.txt
 │   └── README.md
 └── Agent/
@@ -108,6 +109,14 @@ pip install -r requirements.txt
 python server.py                 # http://127.0.0.1:8091/mcp
 ```
 
+工作区管理类的只读工具不需要 Key；上传、向量化、问答要走
+`/api/v1/*`，需在 AnythingLLM 的 **设置 → API Keys** 建一个并配到
+`ANYTHINGLLM_API_KEY`。离线单测不依赖 AnythingLLM：
+
+```bash
+python -m unittest test_server -v      # 23 项
+```
+
 ### 任务 3 · AnythingLLMServer
 
 ```bash
@@ -115,6 +124,9 @@ cd AnythingLLMServer
 pip install -r requirements.txt
 python server.py                 # 浏览器打开 http://127.0.0.1:8092/
 ```
+
+页面上先上传文件（自动向量化），再在下方对话区就这份资料提问。
+问答需要 `ANYTHINGLLM_API_KEY`（chat 接口只挂在 `/api/v1/*` 下）。
 
 ### 任务 4 · Agent/Practice01
 
@@ -159,7 +171,7 @@ python main.py --cli                    # 终端不支持时的纯命令行模�
 ```text
 pethospital.exe (8080)  ──►  PetHospitalMCP  (8090/mcp)
 AnythingLLM    (3001)  ──►  AnythingLLMMCP  (8091/mcp)
-AnythingLLM    (3001)  ◄──  AnythingLLMServer(8092)  ← 浏览器上传页
+AnythingLLM    (3001)  ◄──  AnythingLLMServer(8092)  ← 浏览器上传与问答页
 ```
 
 端口特意错开，三个服务可以同时运行互不冲突。
